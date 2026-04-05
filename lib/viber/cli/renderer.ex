@@ -156,7 +156,7 @@ defmodule Viber.CLI.Renderer do
         []
       end
 
-    [prefix, "\n", Owl.Data.to_chardata(content), suffix, "\n"]
+    [Owl.Data.to_chardata(prefix), "\n", Owl.Data.to_chardata(content), suffix, "\n"]
   end
 
   @spec render_error(String.t()) :: IO.chardata()

@@ -191,6 +191,24 @@ defmodule Viber.Tools.Registry do
       permission: :danger_full_access,
       handler: &Builtins.Clipboard.execute/1
     },
+    "jq" => %Spec{
+      name: "jq",
+      description:
+        "Run a jq filter against a JSON file or a raw JSON string. " <>
+          "Provide either 'path' (path to a JSON file) or 'input' (a JSON string), not both.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "filter" => %{"type" => "string"},
+          "path" => %{"type" => "string"},
+          "input" => %{"type" => "string"}
+        },
+        "required" => ["filter"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.Jq.execute/1
+    },
     "user_input" => %Spec{
       name: "user_input",
       description:
