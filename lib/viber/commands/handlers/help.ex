@@ -14,18 +14,52 @@ defmodule Viber.Commands.Handlers.Help do
 
     lines =
       Enum.flat_map(groups, fn {category, commands} ->
-        header = "\n#{category_title(category)}:"
-        cmds = Enum.map(commands, fn cmd -> "  #{cmd.usage} — #{cmd.description}" end)
+        header =
+          IO.ANSI.format([:bright, :blue, "\n  #{category_title(category)}", :reset])
+          |> IO.chardata_to_string()
+
+        cmds =
+          Enum.map(commands, fn cmd ->
+            usage =
+              IO.ANSI.format([:cyan, "  #{cmd.usage}", :reset])
+              |> IO.chardata_to_string()
+
+            desc =
+              IO.ANSI.format([:faint, " — #{cmd.description}", :reset])
+              |> IO.chardata_to_string()
+
+            "  #{usage}#{desc}"
+          end)
+
         [header | cmds]
       end)
 
-    {:ok, "Available commands:" <> Enum.join(lines, "\n")}
+    {:ok, Enum.join(lines, "\n")}
   end
 
   def execute([name | _], _context) do
     case Registry.get(name) do
       {:ok, spec} ->
-        {:ok, "#{spec.name} — #{spec.description}\nUsage: #{spec.usage}"}
+        output =
+          IO.ANSI.format([
+            :bright,
+            :cyan,
+            spec.name,
+            :reset,
+            :faint,
+            " — ",
+            :reset,
+            spec.description,
+            "\n",
+            :faint,
+            "Usage: ",
+            :reset,
+            :cyan,
+            spec.usage
+          ])
+          |> IO.chardata_to_string()
+
+        {:ok, output}
 
       :error ->
         {:error, "Unknown command: #{name}"}

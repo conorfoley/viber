@@ -35,12 +35,15 @@ defmodule Viber.Tools.Builtins.UserInput do
 
   defp build_prompt(question, []) do
     [
-      IO.ANSI.cyan(),
-      "\n? ",
+      IO.ANSI.magenta(),
+      "\n❯ ",
       IO.ANSI.bright(),
       question,
       IO.ANSI.reset(),
-      "\n> "
+      "\n",
+      IO.ANSI.faint(),
+      "  ❯ ",
+      IO.ANSI.reset()
     ]
   end
 
@@ -49,18 +52,20 @@ defmodule Viber.Tools.Builtins.UserInput do
       options
       |> Enum.with_index(1)
       |> Enum.map(fn {opt, idx} ->
-        [IO.ANSI.faint(), "  #{idx}. ", IO.ANSI.reset(), opt, "\n"]
+        [IO.ANSI.cyan(), "  #{idx}. ", IO.ANSI.reset(), opt, "\n"]
       end)
 
     [
-      IO.ANSI.cyan(),
-      "\n? ",
+      IO.ANSI.magenta(),
+      "\n❯ ",
       IO.ANSI.bright(),
       question,
       IO.ANSI.reset(),
       "\n",
       numbered,
-      "> "
+      IO.ANSI.faint(),
+      "  ❯ ",
+      IO.ANSI.reset()
     ]
   end
 end

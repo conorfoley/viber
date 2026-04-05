@@ -56,26 +56,43 @@ defmodule Viber.Runtime.Permissions do
 
   @spec prompt_user(String.t(), String.t()) :: boolean()
   def prompt_user(tool_name, tool_input) do
-    IO.puts([
-      IO.ANSI.yellow(),
-      "Tool ",
-      IO.ANSI.bright(),
-      tool_name,
-      IO.ANSI.reset(),
-      IO.ANSI.yellow(),
-      " wants to run with input:",
-      IO.ANSI.reset()
-    ])
+    truncated = String.slice(tool_input, 0, 300)
 
-    IO.puts([IO.ANSI.faint(), String.slice(tool_input, 0, 500), IO.ANSI.reset()])
+    content =
+      [
+        Owl.Data.tag(tool_name, [:bright, :yellow]),
+        "\n\n",
+        Owl.Data.tag(truncated, :faint)
+      ]
+
+    box =
+      content
+      |> Owl.Box.new(
+        padding_x: 1,
+        padding_y: 0,
+        border_style: :solid_rounded,
+        border_tag: :yellow,
+        title: Owl.Data.tag(" Permission Required ", :yellow)
+      )
+      |> Owl.Data.to_chardata()
+
+    IO.write(box)
+    IO.puts("")
 
     answer =
-      IO.gets([IO.ANSI.yellow(), "Allow? (y/n) ", IO.ANSI.reset()])
+      IO.gets([
+        IO.ANSI.yellow(),
+        "  Allow? ",
+        IO.ANSI.bright(),
+        "[Y/n]",
+        IO.ANSI.reset(),
+        " "
+      ])
       |> to_string()
       |> String.trim()
       |> String.downcase()
 
-    answer in ["y", "yes"]
+    answer in ["y", "yes", ""]
   end
 
   @spec mode_from_string(String.t()) :: permission_mode()

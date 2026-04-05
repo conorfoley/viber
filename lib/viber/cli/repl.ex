@@ -37,7 +37,7 @@ defmodule Viber.CLI.Repl do
   end
 
   defp loop(state) do
-    case IO.gets("viber> ") do
+    case IO.gets(prompt(state)) do
       :eof ->
         :ok
 
@@ -50,6 +50,11 @@ defmodule Viber.CLI.Repl do
           trimmed -> loop(handle_input(trimmed, state))
         end
     end
+  end
+
+  defp prompt(state) do
+    model = state.model
+    [IO.ANSI.faint(), model, IO.ANSI.reset(), IO.ANSI.magenta(), " ❯ ", IO.ANSI.reset()]
   end
 
   defp handle_input(input, state) do
@@ -99,7 +104,21 @@ defmodule Viber.CLI.Repl do
   defp handle_message(input, state) do
     Logger.info("Repl: sending message, model=#{state.model}")
 
+    spinner_ref = make_ref()
+    spinner_active = :atomics.new(1, signed: false)
+    :atomics.put(spinner_active, 1, 1)
+
+    Owl.Spinner.start(
+      id: spinner_ref,
+      labels: [processing: Owl.Data.tag("Thinking...", :faint)]
+    )
+
     event_handler = fn event ->
+      if :atomics.get(spinner_active, 1) == 1 and event_stops_spinner?(event) do
+        :atomics.put(spinner_active, 1, 0)
+        Owl.Spinner.stop(id: spinner_ref, resolution: :ok)
+      end
+
       handle_event(event)
       :ok
     end
@@ -114,16 +133,32 @@ defmodule Viber.CLI.Repl do
            project_root: state.project_root
          ) do
       {:ok, _result} ->
+        if :atomics.get(spinner_active, 1) == 1 do
+          :atomics.put(spinner_active, 1, 0)
+          Owl.Spinner.stop(id: spinner_ref, resolution: :ok)
+        end
+
         Logger.debug("Repl: message completed successfully")
         IO.puts("")
 
       {:error, err} ->
+        if :atomics.get(spinner_active, 1) == 1 do
+          :atomics.put(spinner_active, 1, 0)
+          Owl.Spinner.stop(id: spinner_ref, resolution: :error)
+        end
+
         Logger.error("Repl: message failed: #{inspect(err)}")
         IO.write(Renderer.render_error(inspect(err)))
     end
 
     state
   end
+
+  defp event_stops_spinner?({:text_delta, _}), do: true
+  defp event_stops_spinner?({:tool_use_start, _, _}), do: true
+  defp event_stops_spinner?({:thinking_delta, _}), do: true
+  defp event_stops_spinner?({:error, _}), do: true
+  defp event_stops_spinner?(_), do: false
 
   defp handle_event({:text_delta, text}), do: IO.write(text)
 
@@ -137,7 +172,7 @@ defmodule Viber.CLI.Repl do
   end
 
   defp handle_event({:thinking_delta, text}) do
-    IO.write([IO.ANSI.faint(), text, IO.ANSI.reset()])
+    IO.write(Renderer.render_thinking(text))
   end
 
   defp handle_event({:turn_complete, usage}) do

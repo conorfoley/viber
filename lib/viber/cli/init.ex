@@ -13,14 +13,48 @@ defmodule Viber.CLI.Init do
     with :ok <- File.mkdir_p(viber_dir),
          :ok <- write_settings(viber_dir, stack),
          :ok <- write_viber_md(project_root, stack) do
-      IO.puts("Initialized Viber project:")
-      IO.puts("  Created #{viber_dir}/settings.json")
-      IO.puts("  Created #{Path.join(project_root, "VIBER.md")}")
+      IO.puts([
+        IO.ANSI.green(),
+        IO.ANSI.bright(),
+        "✔ ",
+        IO.ANSI.reset(),
+        "Initialized Viber project"
+      ])
+
+      IO.puts([
+        IO.ANSI.faint(),
+        "  Created ",
+        IO.ANSI.reset(),
+        IO.ANSI.cyan(),
+        "#{viber_dir}/settings.json",
+        IO.ANSI.reset()
+      ])
+
+      IO.puts([
+        IO.ANSI.faint(),
+        "  Created ",
+        IO.ANSI.reset(),
+        IO.ANSI.cyan(),
+        "#{Path.join(project_root, "VIBER.md")}",
+        IO.ANSI.reset()
+      ])
 
       if stack.language do
-        IO.puts(
-          "  Detected: #{stack.language}#{if stack.framework, do: " (#{stack.framework})", else: ""}"
-        )
+        lang = stack.language
+
+        fw =
+          if stack.framework,
+            do: [IO.ANSI.faint(), " (", IO.ANSI.reset(), stack.framework, IO.ANSI.faint(), ")"],
+            else: []
+
+        IO.puts([
+          IO.ANSI.faint(),
+          "  Detected ",
+          IO.ANSI.reset(),
+          IO.ANSI.bright(),
+          lang,
+          IO.ANSI.reset() | fw
+        ])
       end
 
       :ok

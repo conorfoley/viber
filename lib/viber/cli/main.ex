@@ -100,14 +100,47 @@ defmodule Viber.CLI.Main do
   defp welcome_banner(model, permission_mode, log_path) do
     mode_str = Permissions.mode_to_string(permission_mode)
 
-    """
+    mode_color =
+      case permission_mode do
+        :allow -> :red
+        :danger_full_access -> :red
+        :workspace_write -> :yellow
+        :read_only -> :green
+        _ -> :yellow
+      end
 
-    #{IO.ANSI.bright()}Viber#{IO.ANSI.reset()} — AI Coding Assistant
-    Model: #{model}
-    Mode:  #{mode_str}
-    Logs:  #{log_path}
-    Type /help for commands, or start typing.
-    """
+    content =
+      [
+        Owl.Data.tag("viber", [:bright, :magenta]),
+        Owl.Data.tag(" — AI Coding Assistant", :faint),
+        "\n\n",
+        Owl.Data.tag("  model ", :faint),
+        " ",
+        Owl.Data.tag(model, [:bright, :cyan]),
+        "\n",
+        Owl.Data.tag("  mode  ", :faint),
+        " ",
+        Owl.Data.tag(mode_str, [:bright, mode_color]),
+        "\n",
+        Owl.Data.tag("  logs  ", :faint),
+        " ",
+        Owl.Data.tag(log_path, :faint),
+        "\n\n",
+        Owl.Data.tag("  Type ", :faint),
+        Owl.Data.tag("/help", :cyan),
+        Owl.Data.tag(" for commands, or start typing.", :faint)
+      ]
+
+    banner =
+      content
+      |> Owl.Box.new(
+        padding_x: 1,
+        border_style: :solid_rounded,
+        border_tag: :light_black
+      )
+      |> Owl.Data.to_chardata()
+
+    ["\n", banner, "\n"]
   end
 
   defp print_usage do
