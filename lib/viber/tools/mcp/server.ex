@@ -86,10 +86,12 @@ defmodule Viber.Tools.MCP.Server do
     {:noreply, %{state | pending: pending, next_id: id + 1}}
   end
 
+  @impl true
   def handle_call(:get_tools, _from, state) do
     {:reply, state.tools, state}
   end
 
+  @impl true
   def handle_call({:set_tools, tools}, _from, state) do
     {:reply, :ok, %{state | tools: tools}}
   end
@@ -119,6 +121,7 @@ defmodule Viber.Tools.MCP.Server do
     {:noreply, state}
   end
 
+  @impl true
   def handle_info({port, {:exit_status, _status}}, %{port: port} = state) do
     for {_id, from} <- state.pending do
       GenServer.reply(from, {:error, :server_exited})
@@ -127,6 +130,7 @@ defmodule Viber.Tools.MCP.Server do
     {:stop, :normal, %{state | pending: %{}}}
   end
 
+  @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true

@@ -57,7 +57,6 @@ defmodule Viber.Runtime.Usage do
     |> Enum.chunk_every(3)
     |> Enum.map_join(",", &Enum.reverse/1)
     |> String.reverse()
-    |> String.replace(~r/^,/, "")
   end
 
   defp format_number(n), do: Integer.to_string(n)

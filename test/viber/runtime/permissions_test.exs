@@ -38,6 +38,26 @@ defmodule Viber.Runtime.PermissionsTest do
     assert :allow = Permissions.check(policy, "anything", "{}")
   end
 
+  test "prompt mode auto-allows read-only tools" do
+    policy =
+      Permissions.new_policy(:prompt)
+      |> Permissions.register_tool("ls", :read_only)
+      |> Permissions.register_tool("read_file", :read_only)
+
+    assert :allow = Permissions.check(policy, "ls", "{}")
+    assert :allow = Permissions.check(policy, "read_file", "{}")
+  end
+
+  test "prompt mode returns :prompt for write and dangerous tools" do
+    policy =
+      Permissions.new_policy(:prompt)
+      |> Permissions.register_tool("write_file", :workspace_write)
+      |> Permissions.register_tool("bash", :danger_full_access)
+
+    assert :prompt = Permissions.check(policy, "write_file", "{}")
+    assert :prompt = Permissions.check(policy, "bash", "{}")
+  end
+
   test "mode_from_string round-trips with mode_to_string" do
     for mode <- [:read_only, :workspace_write, :danger_full_access, :prompt, :allow] do
       assert Permissions.mode_from_string(Permissions.mode_to_string(mode)) == mode

@@ -99,6 +99,8 @@ defmodule Viber.Commands.Registry do
     end
   end
 
+  @names @specs |> Enum.map(& &1.name) |> Enum.sort()
+
   @spec names() :: [String.t()]
-  def names, do: Enum.map(@specs, & &1.name) |> Enum.sort()
+  def names, do: @names
 end

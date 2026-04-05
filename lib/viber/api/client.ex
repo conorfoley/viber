@@ -29,16 +29,36 @@ defmodule Viber.API.Client do
     model = resolve_model_alias(model)
 
     cond do
-      String.starts_with?(model, "claude") -> :anthropic
-      String.starts_with?(model, "grok") -> :xai
-      String.starts_with?(model, "gpt-") -> :openai
-      String.starts_with?(model, "o1-") -> :openai
-      String.starts_with?(model, "o3-") -> :openai
-      String.starts_with?(model, "o4-") -> :openai
-      System.get_env("ANTHROPIC_API_KEY") -> :anthropic
-      System.get_env("OPENAI_API_KEY") -> :openai
-      System.get_env("XAI_API_KEY") -> :xai
-      true -> :anthropic
+      String.starts_with?(model, "claude") ->
+        :anthropic
+
+      String.starts_with?(model, "grok") ->
+        :xai
+
+      String.starts_with?(model, "gpt-") ->
+        :openai
+
+      String.starts_with?(model, "o1-") ->
+        :openai
+
+      String.starts_with?(model, "o3-") ->
+        :openai
+
+      String.starts_with?(model, "o4-") ->
+        :openai
+
+      env_key_set?("ANTHROPIC_API_KEY") ->
+        :anthropic
+
+      env_key_set?("OPENAI_API_KEY") ->
+        :openai
+
+      env_key_set?("XAI_API_KEY") ->
+        :xai
+
+      true ->
+        Logger.warning("No API key found in environment, defaulting to :anthropic")
+        :anthropic
     end
   end
 
@@ -53,7 +73,7 @@ defmodule Viber.API.Client do
     end
   end
 
-  @spec from_model(String.t()) :: {:ok, provider_kind(), module()} | {:error, Error.t()}
+  @spec from_model(String.t()) :: {:ok, provider_kind(), module()}
   def from_model(model) do
     case detect_provider(model) do
       :anthropic -> {:ok, :anthropic, Anthropic}
@@ -68,8 +88,9 @@ defmodule Viber.API.Client do
     model = resolve_model_alias(model)
     request = %{request | model: model}
 
-    {:ok, _kind, module} = from_model(model)
-    send_with_retry(module, request)
+    with {:ok, _kind, module} <- from_model(model) do
+      send_with_retry(module, request)
+    end
   end
 
   @spec stream_message(String.t(), MessageRequest.t()) ::
@@ -78,16 +99,27 @@ defmodule Viber.API.Client do
     model = resolve_model_alias(model)
     request = %{request | model: model}
 
-    {:ok, kind, module} = from_model(model)
-    Logger.info("Streaming message: model=#{model} provider=#{kind} module=#{module}")
-    module.stream_message(request)
+    with {:ok, kind, module} <- from_model(model) do
+      Logger.info("Streaming message: model=#{model} provider=#{kind} module=#{module}")
+      module.stream_message(request)
+    end
   end
 
   @spec send_with_retry(module(), MessageRequest.t(), keyword()) ::
           {:ok, MessageResponse.t()} | {:error, Error.t()}
   def send_with_retry(module, request, opts \\ []) do
     max_attempts = Keyword.get(opts, :max_attempts, 3)
-    do_send_with_retry(module, request, 0, max_attempts)
+    timeout = Keyword.get(opts, :timeout, 60_000)
+
+    task =
+      Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
+        do_send_with_retry(module, request, 0, max_attempts)
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task) do
+      {:ok, result} -> result
+      nil -> {:error, %Error{type: :http, message: "retry timed out", retryable: false}}
+    end
   end
 
   defp do_send_with_retry(module, request, attempt, max_attempts) do
@@ -97,6 +129,10 @@ defmodule Viber.API.Client do
 
       {:error, %Error{} = err} ->
         if Error.retryable?(err) and attempt < max_attempts - 1 do
+          Logger.debug(
+            "Retrying request (attempt #{attempt + 1}/#{max_attempts}) after #{backoff(attempt)}ms"
+          )
+
           Process.sleep(backoff(attempt))
           do_send_with_retry(module, request, attempt + 1, max_attempts)
         else
@@ -107,5 +143,13 @@ defmodule Viber.API.Client do
 
   defp backoff(attempt) do
     trunc(:math.pow(2, attempt) * 1_000)
+  end
+
+  defp env_key_set?(var) do
+    case System.get_env(var) do
+      nil -> false
+      "" -> false
+      _ -> true
+    end
   end
 end

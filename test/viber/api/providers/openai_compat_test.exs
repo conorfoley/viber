@@ -118,6 +118,59 @@ defmodule Viber.API.Providers.OpenAICompatTest do
              result.content
   end
 
+  test "stream_events_from_chunks emits incremental tool argument deltas" do
+    chunks = [
+      %{
+        "id" => "chatcmpl-stream-1",
+        "model" => "grok-3",
+        "choices" => [
+          %{
+            "delta" => %{
+              "tool_calls" => [
+                %{
+                  "index" => 0,
+                  "id" => "call_1",
+                  "function" => %{"name" => "get_weather", "arguments" => ~s({"city":")}
+                }
+              ]
+            }
+          }
+        ]
+      },
+      %{
+        "id" => "chatcmpl-stream-1",
+        "model" => "grok-3",
+        "choices" => [
+          %{
+            "delta" => %{
+              "tool_calls" => [
+                %{
+                  "index" => 0,
+                  "function" => %{"arguments" => ~s(Paris"})}
+                }
+              ]
+            }
+          }
+        ]
+      },
+      %{
+        "id" => "chatcmpl-stream-1",
+        "model" => "grok-3",
+        "choices" => [%{"finish_reason" => "tool_calls"}],
+        "usage" => %{"prompt_tokens" => 1, "completion_tokens" => 1}
+      }
+    ]
+
+    events = OpenAICompat.stream_events_from_chunks("grok-3", chunks)
+
+    argument_fragments =
+      for {:content_block_delta, 1, %{type: "input_json_delta", partial_json: fragment}} <- events,
+          do: fragment
+
+    assert argument_fragments == [~s({"city":"), ~s(Paris"})]
+    assert Enum.join(argument_fragments) == ~s({"city":"Paris"})
+  end
+
   test "normalize_finish_reason maps stop reasons" do
     assert OpenAICompat.normalize_finish_reason("stop") == "end_turn"
     assert OpenAICompat.normalize_finish_reason("tool_calls") == "tool_use"

@@ -161,7 +161,10 @@ defmodule Viber.Runtime.ConversationTest do
          }},
         {:content_block_start, 0, %{type: "tool_use", id: "tu_err", name: "write_file"}},
         {:content_block_delta, 0,
-         %{type: "input_json_delta", partial_json: "{\"path\":\"/some.icls\",\"content\":\"...TRUNCATED"}},
+         %{
+           type: "input_json_delta",
+           partial_json: "{\"path\":\"/some.icls\",\"content\":\"...TRUNCATED"
+         }},
         {:stream_error, %RuntimeError{message: "transport timeout"}}
       ]
 

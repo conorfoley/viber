@@ -9,21 +9,31 @@ defmodule Viber.CLI.Repl do
   alias Viber.Commands.Parser
   alias Viber.Runtime.Conversation
 
+  defmodule State do
+    @moduledoc false
+    @enforce_keys [:session, :model]
+    defstruct [:session, :model, :config, :project_root, permission_mode: :prompt]
+
+    @type t :: %__MODULE__{
+            session: pid(),
+            model: String.t(),
+            config: map() | nil,
+            permission_mode: atom(),
+            project_root: String.t() | nil
+          }
+  end
+
   @spec run(keyword()) :: :ok
   def run(opts) do
-    session = Keyword.fetch!(opts, :session)
-    model = Keyword.fetch!(opts, :model)
-    config = Keyword.get(opts, :config)
-    permission_mode = Keyword.get(opts, :permission_mode, :prompt)
-    project_root = Keyword.get(opts, :project_root, File.cwd!())
+    state = %State{
+      session: Keyword.fetch!(opts, :session),
+      model: Keyword.fetch!(opts, :model),
+      config: Keyword.get(opts, :config),
+      permission_mode: Keyword.get(opts, :permission_mode, :prompt),
+      project_root: Keyword.get(opts, :project_root, File.cwd!())
+    }
 
-    loop(%{
-      session: session,
-      model: model,
-      config: config,
-      permission_mode: permission_mode,
-      project_root: project_root
-    })
+    loop(state)
   end
 
   defp loop(state) do
@@ -34,20 +44,16 @@ defmodule Viber.CLI.Repl do
       {:error, _} ->
         :ok
 
-      input ->
-        input = String.trim(input)
-
-        if input == "" do
-          loop(state)
-        else
-          state = handle_input(input, state)
-          loop(state)
+      raw_input ->
+        case String.trim(raw_input) do
+          "" -> loop(state)
+          trimmed -> loop(handle_input(trimmed, state))
         end
     end
   end
 
   defp handle_input(input, state) do
-    if Parser.is_command?(input) do
+    if Parser.command?(input) do
       handle_command(input, state)
     else
       handle_message(input, state)
@@ -57,21 +63,27 @@ defmodule Viber.CLI.Repl do
   defp handle_command(input, state) do
     case Parser.parse(input) do
       {:command, name, args} ->
-        {:ok, spec} = Viber.Commands.Registry.get(name)
-        context = build_command_context(state)
+        case Viber.Commands.Registry.get(name) do
+          {:ok, spec} ->
+            context = build_command_context(state)
 
-        case spec.handler.execute(args, context) do
-          {:ok, output} ->
-            IO.puts(output)
+            case spec.handler.execute(args, context) do
+              {:ok, output} ->
+                IO.puts(output)
 
-          {:error, error} ->
-            IO.write(Renderer.render_error(error))
-        end
+              {:error, error} ->
+                IO.write(Renderer.render_error(error))
+            end
 
-        if name == "model" and args != [] do
-          %{state | model: List.first(args)}
-        else
-          state
+            if name == "model" and args != [] do
+              %{state | model: List.first(args)}
+            else
+              state
+            end
+
+          :error ->
+            IO.write(Renderer.render_error("Unknown command: /#{name}"))
+            state
         end
 
       {:suggestion, _input, suggestions} ->
@@ -136,7 +148,10 @@ defmodule Viber.CLI.Repl do
     IO.write(Renderer.render_error(message))
   end
 
-  defp handle_event(_), do: :ok
+  defp handle_event(event) do
+    Logger.debug("Repl: unhandled event #{inspect(event)}")
+    :ok
+  end
 
   defp build_command_context(state) do
     %{

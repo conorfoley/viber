@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Viber do
 
   @impl true
   def run(args) do
-    Mix.Task.run("app.start")
+    Mix.Task.run("app.start", [])
     Viber.CLI.Main.main(args)
   end
 end

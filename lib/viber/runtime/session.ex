@@ -10,7 +10,7 @@ defmodule Viber.Runtime.Session do
   @type message_role :: :user | :assistant | :system | :tool
   @type content_block ::
           {:text, String.t()}
-          | {:tool_use, String.t(), String.t(), String.t()}
+          | {:tool_use, String.t(), String.t(), String.t() | map()}
           | {:tool_result, String.t(), String.t(), String.t(), boolean()}
 
   @type message :: %{
@@ -96,31 +96,37 @@ defmodule Viber.Runtime.Session do
         state.cumulative_usage
       end
 
-    state = %{state | messages: state.messages ++ [message], cumulative_usage: new_usage}
+    state = %{state | messages: [message | state.messages], cumulative_usage: new_usage}
     {:reply, :ok, state}
   end
 
+  @impl true
   def handle_call(:get_messages, _from, state) do
-    {:reply, state.messages, state}
+    {:reply, Enum.reverse(state.messages), state}
   end
 
+  @impl true
   def handle_call(:get_usage, _from, state) do
     {:reply, state.cumulative_usage, state}
   end
 
+  @impl true
   def handle_call(:clear, _from, state) do
     {:reply, :ok, %{state | messages: [], cumulative_usage: %Usage{}}}
   end
 
+  @impl true
   def handle_call({:replace_messages, messages}, _from, state) do
     usage = recompute_usage(messages)
     {:reply, :ok, %{state | messages: messages, cumulative_usage: usage}}
   end
 
+  @impl true
   def handle_call(:save, _from, %{storage_path: nil} = state) do
     {:reply, {:error, :no_storage_path}, state}
   end
 
+  @impl true
   def handle_call(:save, _from, state) do
     json = to_json(state)
 
@@ -131,7 +137,7 @@ defmodule Viber.Runtime.Session do
   end
 
   defp generate_id do
-    Integer.to_string(System.unique_integer([:monotonic, :positive]))
+    :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
   end
 
   defp recompute_usage(messages) do
@@ -142,8 +148,9 @@ defmodule Viber.Runtime.Session do
 
   defp to_json(%__MODULE__{} = state) do
     %{
+      "id" => state.id,
       "version" => state.version,
-      "messages" => Enum.map(state.messages, &message_to_json/1)
+      "messages" => state.messages |> Enum.reverse() |> Enum.map(&message_to_json/1)
     }
   end
 
@@ -182,8 +189,8 @@ defmodule Viber.Runtime.Session do
     %{
       "input_tokens" => u.input_tokens,
       "output_tokens" => u.output_tokens,
-      "cache_creation_input_tokens" => u.cache_creation_tokens,
-      "cache_read_input_tokens" => u.cache_read_tokens
+      "cache_creation_tokens" => u.cache_creation_tokens,
+      "cache_read_tokens" => u.cache_read_tokens
     }
   end
 
@@ -192,7 +199,7 @@ defmodule Viber.Runtime.Session do
     messages = Enum.map(data["messages"] || [], &message_from_json/1)
 
     %__MODULE__{
-      id: generate_id(),
+      id: data["id"] || generate_id(),
       version: data["version"] || 1,
       messages: messages,
       cumulative_usage: recompute_usage(messages),
@@ -235,8 +242,9 @@ defmodule Viber.Runtime.Session do
     %Usage{
       input_tokens: json["input_tokens"] || 0,
       output_tokens: json["output_tokens"] || 0,
-      cache_creation_tokens: json["cache_creation_input_tokens"] || 0,
-      cache_read_tokens: json["cache_read_input_tokens"] || 0,
+      cache_creation_tokens:
+        json["cache_creation_tokens"] || json["cache_creation_input_tokens"] || 0,
+      cache_read_tokens: json["cache_read_tokens"] || json["cache_read_input_tokens"] || 0,
       turns: 1
     }
   end

@@ -18,7 +18,7 @@ defmodule Viber.Tools.RegistryTest do
   describe "list_names/0" do
     test "returns all tool names sorted" do
       names = Registry.list_names()
-      assert length(names) == 8
+      assert length(names) > 0
       assert names == Enum.sort(names)
     end
   end

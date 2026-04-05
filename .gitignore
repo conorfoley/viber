@@ -34,3 +34,5 @@ viber-*.tar
 /.viber/
 
 .DS_Store
+
+.idea/

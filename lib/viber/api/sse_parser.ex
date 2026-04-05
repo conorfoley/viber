@@ -33,12 +33,12 @@ defmodule Viber.API.SSEParser do
       {frame, rest} ->
         case parse_frame(frame) do
           {:ok, nil} -> extract_frames(%__MODULE__{buffer: rest}, acc)
-          {:ok, event} -> extract_frames(%__MODULE__{buffer: rest}, acc ++ [event])
+          {:ok, event} -> extract_frames(%__MODULE__{buffer: rest}, [event | acc])
           {:error, _} = err -> err
         end
 
       nil ->
-        {:ok, parser, acc}
+        {:ok, parser, Enum.reverse(acc)}
     end
   end
 
@@ -79,7 +79,7 @@ defmodule Viber.API.SSEParser do
               {String.trim(String.trim_leading(line, "event:")), data}
 
             String.starts_with?(line, "data:") ->
-              {ev, data ++ [String.trim_leading(String.trim_leading(line, "data:"), " ")]}
+              {ev, [String.trim_leading(String.trim_leading(line, "data:"), " ") | data]}
 
             true ->
               {ev, data}
@@ -94,7 +94,7 @@ defmodule Viber.API.SSEParser do
           {:ok, nil}
 
         true ->
-          payload = Enum.join(data_lines, "\n")
+          payload = data_lines |> Enum.reverse() |> Enum.join("\n")
 
           if payload == "[DONE]" do
             {:ok, nil}

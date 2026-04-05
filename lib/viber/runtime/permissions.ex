@@ -4,7 +4,7 @@ defmodule Viber.Runtime.Permissions do
   """
 
   @type permission_mode :: :read_only | :workspace_write | :danger_full_access | :prompt | :allow
-  @type outcome :: :allow | {:deny, String.t()}
+  @type outcome :: :allow | :prompt | {:deny, String.t()}
 
   defmodule Policy do
     @moduledoc """
@@ -39,6 +39,12 @@ defmodule Viber.Runtime.Permissions do
       current == :allow ->
         :allow
 
+      current == :prompt && mode_rank(required) <= mode_rank(:read_only) ->
+        :allow
+
+      current == :prompt ->
+        :prompt
+
       mode_rank(current) >= mode_rank(required) ->
         :allow
 
@@ -46,6 +52,30 @@ defmodule Viber.Runtime.Permissions do
         {:deny,
          "tool '#{tool_name}' requires #{mode_to_string(required)} permission; current mode is #{mode_to_string(current)}"}
     end
+  end
+
+  @spec prompt_user(String.t(), String.t()) :: boolean()
+  def prompt_user(tool_name, tool_input) do
+    IO.puts([
+      IO.ANSI.yellow(),
+      "Tool ",
+      IO.ANSI.bright(),
+      tool_name,
+      IO.ANSI.reset(),
+      IO.ANSI.yellow(),
+      " wants to run with input:",
+      IO.ANSI.reset()
+    ])
+
+    IO.puts([IO.ANSI.faint(), String.slice(tool_input, 0, 500), IO.ANSI.reset()])
+
+    answer =
+      IO.gets([IO.ANSI.yellow(), "Allow? (y/n) ", IO.ANSI.reset()])
+      |> to_string()
+      |> String.trim()
+      |> String.downcase()
+
+    answer in ["y", "yes"]
   end
 
   @spec mode_from_string(String.t()) :: permission_mode()

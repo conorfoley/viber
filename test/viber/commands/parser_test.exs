@@ -20,9 +20,9 @@ defmodule Viber.Commands.ParserTest do
     assert {:not_command, "hello"} = Parser.parse("hello")
   end
 
-  test "is_command? detects slash prefix" do
-    assert Parser.is_command?("/help")
-    refute Parser.is_command?("hello")
+  test "command? detects slash prefix" do
+    assert Parser.command?("/help")
+    refute Parser.command?("hello")
   end
 
   test "parses command with multiple args" do

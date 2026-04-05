@@ -102,10 +102,7 @@ defmodule Viber.Tools.Builtins.FileOps do
   def edit(_), do: {:error, "Missing required parameters: path, old_string, new_string"}
 
   defp count_occurrences(string, pattern) do
-    string
-    |> String.split(pattern)
-    |> length()
-    |> Kernel.-(1)
+    length(String.split(string, pattern)) - 1
   end
 
   defp replace_first(string, old, new) do

@@ -42,7 +42,7 @@ defmodule Viber.Commands.Parser do
 
   def parse(input), do: {:not_command, input}
 
-  @spec is_command?(String.t()) :: boolean()
-  def is_command?("/" <> _), do: true
-  def is_command?(_), do: false
+  @spec command?(String.t()) :: boolean()
+  def command?("/" <> _), do: true
+  def command?(_), do: false
 end

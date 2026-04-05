@@ -15,31 +15,29 @@ defmodule Viber.API.Providers.Anthropic do
   def send_message(%MessageRequest{} = request) do
     Logger.debug("Anthropic send_message: model=#{request.model}")
 
-    with {:ok, api_key} <- get_api_key(),
-         req <- build_req(api_key),
-         _ = Logger.debug("Anthropic send_message: posting to /v1/messages"),
-         {:ok, %{status: status, body: body}} when status in 200..299 <-
-           Req.post(req, url: "/v1/messages", json: %{request | stream: false}) do
-      Logger.debug("Anthropic send_message: success status=#{status}")
-      {:ok, Types.decode_response(body)}
-    else
-      {:ok, %{status: status, body: body}} ->
-        Logger.warning("Anthropic send_message: API error status=#{status}")
-        {:error, api_error_from_body(status, body)}
+    with {:ok, api_key} <- get_api_key() do
+      req = build_req(api_key)
+      Logger.debug("Anthropic send_message: posting to /v1/messages")
 
-      {:error, %Error{} = err} ->
-        Logger.warning("Anthropic send_message: error type=#{err.type} message=#{err.message}")
-        {:error, err}
+      case Req.post(req, url: "/v1/messages", json: %{request | stream: false}) do
+        {:ok, %{status: status, body: body}} when status in 200..299 ->
+          Logger.debug("Anthropic send_message: success status=#{status}")
+          {:ok, Types.decode_response(body)}
 
-      {:error, exception} ->
-        Logger.error("Anthropic send_message: HTTP error #{Exception.message(exception)}")
+        {:ok, %{status: status, body: body}} ->
+          Logger.warning("Anthropic send_message: API error status=#{status}")
+          {:error, api_error_from_body(status, body)}
 
-        {:error,
-         %Error{
-           type: :http,
-           message: "http error: #{Exception.message(exception)}",
-           retryable: true
-         }}
+        {:error, exception} ->
+          Logger.error("Anthropic send_message: HTTP error #{Exception.message(exception)}")
+
+          {:error,
+           %Error{
+             type: :http,
+             message: "http error: #{Exception.message(exception)}",
+             retryable: true
+           }}
+      end
     end
   end
 
@@ -47,36 +45,34 @@ defmodule Viber.API.Providers.Anthropic do
   def stream_message(%MessageRequest{} = request) do
     Logger.debug("Anthropic stream_message: model=#{request.model}")
 
-    with {:ok, api_key} <- get_api_key(),
-         req <- build_req(api_key),
-         _ = Logger.debug("Anthropic stream_message: posting to /v1/messages (streaming)"),
-         {:ok, %{status: status, body: async}} when status in 200..299 <-
-           Req.post(req,
+    with {:ok, api_key} <- get_api_key() do
+      req = build_req(api_key)
+      Logger.debug("Anthropic stream_message: posting to /v1/messages (streaming)")
+
+      case Req.post(req,
              url: "/v1/messages",
              json: MessageRequest.with_streaming(request),
              into: :self
            ) do
-      Logger.debug("Anthropic stream_message: stream started, status=#{status}")
-      {:ok, build_event_stream(async)}
-    else
-      {:ok, %{status: status, body: async}} ->
-        Logger.warning("Anthropic stream_message: API error status=#{status}")
-        body = collect_async_body(async)
-        {:error, api_error_from_body(status, body)}
+        {:ok, %{status: status, body: async}} when status in 200..299 ->
+          Logger.debug("Anthropic stream_message: stream started, status=#{status}")
+          {:ok, build_event_stream(async)}
 
-      {:error, %Error{} = err} ->
-        Logger.warning("Anthropic stream_message: error type=#{err.type} message=#{err.message}")
-        {:error, err}
+        {:ok, %{status: status, body: async}} ->
+          Logger.warning("Anthropic stream_message: API error status=#{status}")
+          body = collect_async_body(async)
+          {:error, api_error_from_body(status, body)}
 
-      {:error, exception} ->
-        Logger.error("Anthropic stream_message: HTTP error #{Exception.message(exception)}")
+        {:error, exception} ->
+          Logger.error("Anthropic stream_message: HTTP error #{Exception.message(exception)}")
 
-        {:error,
-         %Error{
-           type: :http,
-           message: "http error: #{Exception.message(exception)}",
-           retryable: true
-         }}
+          {:error,
+           %Error{
+             type: :http,
+             message: "http error: #{Exception.message(exception)}",
+             retryable: true
+           }}
+      end
     end
   end
 
@@ -91,7 +87,10 @@ defmodule Viber.API.Providers.Anthropic do
         {:error, Error.missing_credentials("Anthropic", ["ANTHROPIC_API_KEY"])}
 
       key ->
-        Logger.debug("ANTHROPIC_API_KEY found (#{String.length(key)} chars, ends in ...#{String.slice(key, -4..-1//1)})")
+        Logger.debug(
+          "ANTHROPIC_API_KEY found (#{String.length(key)} chars, ends in ...#{String.slice(key, -4..-1//1)})"
+        )
+
         {:ok, key}
     end
   end
@@ -133,8 +132,15 @@ defmodule Viber.API.Providers.Anthropic do
               case async.stream_fun.(ref, message) do
                 {:ok, [data: chunk]} ->
                   new_count = chunk_count + 1
-                  if new_count == 1, do: Logger.debug("Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)")
-                  if rem(new_count, 50) == 0, do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
+
+                  if new_count == 1,
+                    do:
+                      Logger.debug(
+                        "Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)"
+                      )
+
+                  if rem(new_count, 50) == 0,
+                    do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
 
                   case SSEParser.push(parser, chunk) do
                     {:ok, new_parser, events} -> {events, {async, new_parser, new_count}}
@@ -143,6 +149,7 @@ defmodule Viber.API.Providers.Anthropic do
 
                 {:ok, [:done]} ->
                   Logger.debug("Anthropic SSE: stream done after #{chunk_count} chunks")
+
                   case SSEParser.finish(parser) do
                     {:ok, events} -> {events, :done}
                     {:error, _} = err -> {[err], :done}
@@ -161,7 +168,10 @@ defmodule Viber.API.Providers.Anthropic do
               {[], {async, parser, chunk_count}}
           after
             60_000 ->
-              Logger.warning("Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)")
+              Logger.warning(
+                "Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)"
+              )
+
               {[], {async, parser, chunk_count}}
           end
       end,
@@ -170,7 +180,7 @@ defmodule Viber.API.Providers.Anthropic do
   end
 
   defp collect_async_body(%Req.Response.Async{} = async) do
-    Enum.into(async, []) |> IO.iodata_to_binary()
+    Enum.join(async)
   end
 
   defp collect_async_body(body) when is_binary(body), do: body

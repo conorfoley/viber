@@ -3,6 +3,8 @@ defmodule Viber.Runtime.Config do
   Layered config discovery and merging from User → Project → Local.
   """
 
+  require Logger
+
   @type config_source :: :user | :project | :local
 
   @type mcp_server_config ::
@@ -24,7 +26,6 @@ defmodule Viber.Runtime.Config do
           loaded_entries: [{config_source(), String.t()}]
         }
 
-  @enforce_keys []
   defstruct model: nil,
             permission_mode: nil,
             mcp_servers: %{},
@@ -41,10 +42,10 @@ defmodule Viber.Runtime.Config do
       Enum.reduce(entries, %__MODULE__{}, fn {source, path}, acc ->
         case load_file(path) do
           {:ok, data} ->
-            merged = merge(acc, from_map(data, source, path))
-            merged
+            merge(acc, from_map(data, source, path))
 
-          {:error, _} ->
+          {:error, reason} ->
+            Logger.warning("Failed to load config from #{path}: #{inspect(reason)}")
             acc
         end
       end)

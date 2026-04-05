@@ -67,7 +67,13 @@ defmodule Viber.Runtime.Compact do
   end
 
   defp block_chars({:text, text}), do: String.length(text)
-  defp block_chars({:tool_use, _, _, input}), do: String.length(input) + 20
+
+  defp block_chars({:tool_use, _, _, input}) when is_binary(input),
+    do: String.length(input) + 20
+
+  defp block_chars({:tool_use, _, _, input}) when is_map(input),
+    do: input |> Jason.encode!() |> byte_size() |> Kernel.+(20)
+
   defp block_chars({:tool_result, _, _, output, _}), do: String.length(output) + 20
   defp block_chars(_), do: 0
 

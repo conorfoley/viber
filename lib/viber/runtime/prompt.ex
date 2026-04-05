@@ -82,13 +82,12 @@ defmodule Viber.Runtime.Prompt do
     names = Registry.list_names()
 
     tool_lines =
-      Enum.map(names, fn name ->
+      Enum.flat_map(names, fn name ->
         case Registry.get(name) do
-          {:ok, spec} -> " - #{spec.name}: #{spec.description}"
-          :error -> nil
+          {:ok, spec} -> [" - #{spec.name}: #{spec.description}"]
+          :error -> []
         end
       end)
-      |> Enum.reject(&is_nil/1)
 
     ["# Available Tools" | tool_lines]
     |> Enum.join("\n")
@@ -103,18 +102,16 @@ defmodule Viber.Runtime.Prompt do
     ]
 
     contents =
-      candidates
-      |> Enum.map(fn path ->
+      Enum.flat_map(candidates, fn path ->
         case File.read(path) do
           {:ok, content} when content != "" ->
             trimmed = String.trim(content)
-            if trimmed != "", do: "## #{Path.basename(path)}\n#{trimmed}", else: nil
+            if trimmed != "", do: ["## #{Path.basename(path)}\n#{trimmed}"], else: []
 
           _ ->
-            nil
+            []
         end
       end)
-      |> Enum.reject(&is_nil/1)
 
     if contents == [] do
       nil

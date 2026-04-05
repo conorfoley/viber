@@ -42,6 +42,8 @@ defmodule Viber.CLI.Main do
   end
 
   defp run_repl(opts) do
+    log_path = setup_file_logging()
+
     config_opts =
       if opts[:config] do
         [project_root: Path.dirname(opts[:config])]
@@ -67,7 +69,7 @@ defmodule Viber.CLI.Main do
 
     {:ok, session} = Session.start_link()
 
-    IO.puts(welcome_banner(resolved_model, permission_mode))
+    IO.puts(welcome_banner(resolved_model, permission_mode, log_path))
 
     Repl.run(
       session: session,
@@ -78,7 +80,24 @@ defmodule Viber.CLI.Main do
     )
   end
 
-  defp welcome_banner(model, permission_mode) do
+  defp setup_file_logging do
+    log_path = Path.join(System.tmp_dir!(), "viber.log")
+
+    Enum.each(:logger.get_handler_ids(), &:logger.remove_handler/1)
+
+    :logger.add_handler(:viber_file, :logger_std_h, %{
+      config: %{file: String.to_charlist(log_path)},
+      formatter:
+        {:logger_formatter,
+         %{
+           template: [:time, " [", :level, "] ", :msg, "\n"]
+         }}
+    })
+
+    log_path
+  end
+
+  defp welcome_banner(model, permission_mode, log_path) do
     mode_str = Permissions.mode_to_string(permission_mode)
 
     """
@@ -86,6 +105,7 @@ defmodule Viber.CLI.Main do
     #{IO.ANSI.bright()}Viber#{IO.ANSI.reset()} — AI Coding Assistant
     Model: #{model}
     Mode:  #{mode_str}
+    Logs:  #{log_path}
     Type /help for commands, or start typing.
     """
   end

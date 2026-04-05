@@ -1,24 +1,3 @@
-defmodule Viber.Runtime.Conversation.StreamAccumulator do
-  @moduledoc """
-  Accumulates stream events into a complete response.
-  """
-
-  @type block_state ::
-          %{type: :text, text: String.t()}
-          | %{type: :tool_use, id: String.t(), name: String.t(), input: String.t()}
-          | %{type: :thinking, text: String.t()}
-          | %{type: :unknown}
-
-  @type t :: %__MODULE__{
-          response: Viber.API.MessageResponse.t() | nil,
-          blocks: %{non_neg_integer() => block_state()},
-          current_usage: Viber.API.Usage.t() | nil,
-          stream_error: term() | nil
-        }
-
-  defstruct response: nil, blocks: %{}, current_usage: nil, stream_error: nil
-end
-
 defmodule Viber.Runtime.Conversation do
   @moduledoc """
   Conversation loop orchestrating LLM interaction, tool execution, and session management.
@@ -28,7 +7,7 @@ defmodule Viber.Runtime.Conversation do
 
   alias Viber.API.{Client, MessageRequest}
   alias Viber.Runtime.{Permissions, Prompt, Session, Usage}
-  alias Viber.Runtime.Conversation.StreamAccumulator
+  alias Viber.Runtime.Conversation.{Context, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
 
   @type event ::
@@ -43,61 +22,39 @@ defmodule Viber.Runtime.Conversation do
 
   @spec run(keyword()) :: {:ok, term()} | {:error, term()}
   def run(opts) do
-    session = Keyword.fetch!(opts, :session)
-    model = Keyword.fetch!(opts, :model)
-    user_input = Keyword.fetch!(opts, :user_input)
-    config = Keyword.get(opts, :config)
-    event_handler = Keyword.get(opts, :event_handler, fn _event -> :ok end)
-    permission_mode = Keyword.get(opts, :permission_mode, :prompt)
-    project_root = Keyword.get(opts, :project_root, File.cwd!())
-    provider_module = Keyword.get(opts, :provider_module)
+    ctx = %Context{
+      session: Keyword.fetch!(opts, :session),
+      model: Keyword.fetch!(opts, :model),
+      config: Keyword.get(opts, :config),
+      event_handler: Keyword.get(opts, :event_handler, fn _event -> :ok end),
+      permission_mode: Keyword.get(opts, :permission_mode, :prompt),
+      project_root: Keyword.get(opts, :project_root, File.cwd!()),
+      provider_module: Keyword.get(opts, :provider_module)
+    }
 
-    Logger.info("Conversation.run: model=#{model} input=#{String.slice(user_input, 0..80)}")
+    user_input = Keyword.fetch!(opts, :user_input)
+    Logger.info("Conversation.run: model=#{ctx.model} input=#{String.slice(user_input, 0..80)}")
 
     user_msg = %{role: :user, blocks: [{:text, user_input}], usage: nil}
-    :ok = Session.add_message(session, user_msg)
+    :ok = Session.add_message(ctx.session, user_msg)
 
-    turn_loop(
-      session,
-      model,
-      config,
-      event_handler,
-      permission_mode,
-      project_root,
-      provider_module,
-      0
-    )
+    turn_loop(ctx, 0)
   end
 
-  defp turn_loop(
-         _session,
-         _model,
-         _config,
-         event_handler,
-         _permission_mode,
-         _project_root,
-         _provider_module,
-         iteration
-       )
-       when iteration >= @max_iterations do
-    event_handler.({:error, "Maximum iterations (#{@max_iterations}) exceeded"})
+  defp turn_loop(%Context{event_handler: handler}, iteration) when iteration >= @max_iterations do
+    handler.({:error, "Maximum iterations (#{@max_iterations}) exceeded"})
     {:error, :max_iterations}
   end
 
-  defp turn_loop(
-         session,
-         model,
-         config,
-         event_handler,
-         permission_mode,
-         project_root,
-         provider_module,
-         iteration
-       ) do
-    messages = Session.get_messages(session)
+  defp turn_loop(%Context{} = ctx, iteration) do
+    messages = Session.get_messages(ctx.session)
 
     system_prompt =
-      Prompt.build(config: config, permission_mode: permission_mode, project_root: project_root)
+      Prompt.build(
+        config: ctx.config,
+        permission_mode: ctx.permission_mode,
+        project_root: ctx.project_root
+      )
 
     tool_defs =
       Registry.builtin_specs()
@@ -106,97 +63,54 @@ defmodule Viber.Runtime.Conversation do
     api_messages = Enum.map(messages, &to_api_message/1)
 
     request = %MessageRequest{
-      model: Client.resolve_model_alias(model),
-      max_tokens: Client.max_tokens_for_model(model),
+      model: Client.resolve_model_alias(ctx.model),
+      max_tokens: Client.max_tokens_for_model(ctx.model),
       messages: api_messages,
       system: system_prompt,
       tools: tool_defs,
       stream: true
     }
 
-    Logger.debug("Conversation turn_loop: iteration=#{iteration} messages=#{length(messages)} tools=#{length(tool_defs)}")
+    Logger.debug(
+      "Conversation turn_loop: iteration=#{iteration} messages=#{length(messages)} tools=#{length(tool_defs)}"
+    )
 
-    case do_stream(request, model, provider_module) do
+    case do_stream(request, ctx) do
       {:ok, stream} ->
         Logger.debug("Conversation turn_loop: stream started, processing events")
-        acc = process_stream(stream, event_handler)
+        acc = process_stream(stream, ctx.event_handler)
         Logger.debug("Conversation turn_loop: stream complete, handling result")
-
-        handle_turn_result(
-          acc,
-          session,
-          model,
-          config,
-          event_handler,
-          permission_mode,
-          project_root,
-          provider_module,
-          iteration
-        )
+        handle_turn_result(acc, ctx, iteration)
 
       {:error, err} ->
         Logger.error("Conversation turn_loop: stream error #{inspect(err)}")
-        event_handler.({:error, inspect(err)})
+        ctx.event_handler.({:error, inspect(err)})
         {:error, err}
     end
   end
 
-  defp do_stream(request, model, nil) do
+  defp do_stream(request, %Context{provider_module: nil, model: model}) do
     Client.stream_message(model, request)
   end
 
-  defp do_stream(request, _model, provider_module) do
+  defp do_stream(request, %Context{provider_module: provider_module}) do
     provider_module.stream_message(request)
   end
 
-  defp handle_turn_result(
-         acc,
-         session,
-         model,
-         config,
-         event_handler,
-         permission_mode,
-         project_root,
-         provider_module,
-         iteration
-       ) do
-    if acc.stream_error do
-      Logger.error("Conversation: aborting turn due to stream error: #{inspect(acc.stream_error)}")
-      {:error, {:stream_error, acc.stream_error}}
-    else
-      handle_completed_turn(
-        acc,
-        session,
-        model,
-        config,
-        event_handler,
-        permission_mode,
-        project_root,
-        provider_module,
-        iteration
-      )
-    end
+  defp handle_turn_result(%StreamAccumulator{stream_error: error}, _ctx, _iteration)
+       when not is_nil(error) do
+    Logger.error("Conversation: aborting turn due to stream error: #{inspect(error)}")
+    {:error, {:stream_error, error}}
   end
 
-  defp handle_completed_turn(
-         acc,
-         session,
-         model,
-         config,
-         event_handler,
-         permission_mode,
-         project_root,
-         provider_module,
-         iteration
-       ) do
+  defp handle_turn_result(acc, %Context{} = ctx, iteration) do
     tool_uses = extract_tool_uses(acc.blocks)
     text_content = extract_text(acc.blocks)
 
     usage =
-      if acc.current_usage do
-        Usage.from_api_usage(acc.current_usage)
-      else
-        %Usage{}
+      case acc.current_usage do
+        nil -> %Usage{}
+        api_usage -> Usage.from_api_usage(api_usage)
       end
 
     assistant_blocks =
@@ -205,22 +119,26 @@ defmodule Viber.Runtime.Conversation do
           [{:text, text}]
 
         {_idx, %{type: :tool_use, id: id, name: name, input: input}} ->
-          [{:tool_use, id, name, input}]
+          parsed = parse_tool_input(input)
+          [{:tool_use, id, name, parsed}]
 
         _ ->
           []
       end)
 
     assistant_msg = %{role: :assistant, blocks: assistant_blocks, usage: usage}
-    :ok = Session.add_message(session, assistant_msg)
+    :ok = Session.add_message(ctx.session, assistant_msg)
 
     if tool_uses == [] do
       Logger.debug("Conversation: turn complete, no tool calls")
-      event_handler.({:turn_complete, usage})
+      ctx.event_handler.({:turn_complete, usage})
       {:ok, %{text: text_content, usage: usage, iterations: iteration + 1}}
     else
-      Logger.info("Conversation: executing #{length(tool_uses)} tool(s): #{Enum.map_join(tool_uses, ", ", fn {_id, name, _input} -> name end)}")
-      tool_results = execute_tools(tool_uses, permission_mode, event_handler)
+      Logger.info(
+        "Conversation: executing #{length(tool_uses)} tool(s): #{Enum.map_join(tool_uses, ", ", fn {_id, name, _input} -> name end)}"
+      )
+
+      tool_results = execute_tools(tool_uses, ctx.permission_mode, ctx.event_handler)
 
       tool_result_blocks =
         Enum.map(tool_results, fn {id, name, output, is_error} ->
@@ -228,18 +146,9 @@ defmodule Viber.Runtime.Conversation do
         end)
 
       tool_msg = %{role: :user, blocks: tool_result_blocks, usage: nil}
-      :ok = Session.add_message(session, tool_msg)
+      :ok = Session.add_message(ctx.session, tool_msg)
 
-      turn_loop(
-        session,
-        model,
-        config,
-        event_handler,
-        permission_mode,
-        project_root,
-        provider_module,
-        iteration + 1
-      )
+      turn_loop(ctx, iteration + 1)
     end
   end
 
@@ -250,21 +159,32 @@ defmodule Viber.Runtime.Conversation do
         Permissions.register_tool(pol, spec.name, spec.permission)
       end)
 
-    Enum.map(tool_uses, fn {id, name, input_json} ->
+    Enum.map(tool_uses, fn {id, name, input_map} ->
       event_handler.({:tool_use_start, name, id})
 
-      case Permissions.check(policy, name, input_json) do
-        :allow ->
-          input = parse_tool_input(input_json)
+      input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
 
-          case Executor.execute(name, input) do
-            {:ok, output} ->
-              event_handler.({:tool_result, name, output, false})
-              {id, name, output, false}
+      case Permissions.check(policy, name, input_str) do
+        permission when permission in [:allow, :prompt] ->
+          allowed =
+            permission == :allow || Permissions.prompt_user(name, input_str)
 
-            {:error, error} ->
-              event_handler.({:tool_result, name, error, true})
-              {id, name, error, true}
+          if allowed do
+            input = ensure_parsed_input(input_map)
+
+            case Executor.execute(name, input) do
+              {:ok, output} ->
+                event_handler.({:tool_result, name, output, false})
+                {id, name, output, false}
+
+              {:error, error} ->
+                event_handler.({:tool_result, name, error, true})
+                {id, name, error, true}
+            end
+          else
+            reason = "tool '#{name}' denied by user"
+            event_handler.({:tool_result, name, reason, true})
+            {id, name, reason, true}
           end
 
         {:deny, reason} ->
@@ -283,6 +203,9 @@ defmodule Viber.Runtime.Conversation do
 
   defp parse_tool_input(input) when is_map(input), do: input
 
+  defp ensure_parsed_input(input) when is_map(input), do: input
+  defp ensure_parsed_input(input) when is_binary(input), do: parse_tool_input(input)
+
   defp to_api_message(%{role: role, blocks: blocks}) do
     api_role =
       case role do
@@ -299,13 +222,7 @@ defmodule Viber.Runtime.Conversation do
   defp block_to_api_content({:text, text}), do: %{type: "text", text: text}
 
   defp block_to_api_content({:tool_use, id, name, input}) do
-    parsed =
-      case Jason.decode(input) do
-        {:ok, map} -> map
-        _ -> %{}
-      end
-
-    %{type: "tool_use", id: id, name: name, input: parsed}
+    %{type: "tool_use", id: id, name: name, input: input}
   end
 
   defp block_to_api_content({:tool_result, tool_use_id, _tool_name, output, is_error}) do
@@ -330,7 +247,9 @@ defmodule Viber.Runtime.Conversation do
   end
 
   defp process_event({:content_block_start, idx, block}, acc, _handler) do
-    Logger.debug("Stream event: content_block_start idx=#{idx} type=#{Map.get(block, :type, "?")}")
+    Logger.debug(
+      "Stream event: content_block_start idx=#{idx} type=#{Map.get(block, :type, "?")}"
+    )
 
     block_state =
       case block do
@@ -410,6 +329,6 @@ defmodule Viber.Runtime.Conversation do
       {_idx, %{type: :text, text: text}} -> [text]
       _ -> []
     end)
-    |> Enum.join("")
+    |> Enum.join()
   end
 end

@@ -76,7 +76,7 @@ defmodule Viber.Tools.MCP.ServerManager do
   defp discover_tools(pid, server_name) do
     case Client.initialize(pid) do
       {:ok, _} ->
-        Server.request(pid, "notifications/initialized", nil)
+        Server.request(pid, "notifications/initialized", %{})
 
         case Client.list_tools(pid) do
           {:ok, tools} ->
@@ -95,8 +95,8 @@ defmodule Viber.Tools.MCP.ServerManager do
   end
 
   defp mcp_tool_to_spec(server_name, tool) do
-    normalized_server = normalize_mcp_name(server_name)
-    normalized_tool = normalize_mcp_name(tool["name"] || "")
+    normalized_server = Viber.Tools.Registry.normalize_name(server_name)
+    normalized_tool = Viber.Tools.Registry.normalize_name(tool["name"] || "")
 
     %Spec{
       name: "mcp__#{normalized_server}__#{normalized_tool}",
@@ -104,11 +104,5 @@ defmodule Viber.Tools.MCP.ServerManager do
       input_schema: tool["inputSchema"] || %{"type" => "object", "properties" => %{}},
       permission: :workspace_write
     }
-  end
-
-  defp normalize_mcp_name(name) do
-    name
-    |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
-    |> String.downcase()
   end
 end

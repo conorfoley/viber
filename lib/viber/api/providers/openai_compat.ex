@@ -188,7 +188,7 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp translate_message(%Viber.API.InputMessage{role: "assistant", content: content}) do
-    {text, tool_calls} =
+    {text, rev_tool_calls} =
       Enum.reduce(content, {"", []}, fn block, {txt, tcs} ->
         case block do
           %{type: "text", text: t} ->
@@ -201,12 +201,14 @@ defmodule Viber.API.Providers.OpenAICompat do
               function: %{name: name, arguments: Jason.encode!(input)}
             }
 
-            {txt, tcs ++ [tc]}
+            {txt, [tc | tcs]}
 
           _ ->
             {txt, tcs}
         end
       end)
+
+    tool_calls = Enum.reverse(rev_tool_calls)
 
     if text == "" && tool_calls == [] do
       []
@@ -326,23 +328,24 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp process_openai_chunk(buffer, state) do
-    process_openai_frames(buffer, state, [])
+    {rev_events, new_buffer, new_state} = process_openai_frames(buffer, state, [])
+    {Enum.reverse(rev_events), new_buffer, new_state}
   end
 
-  defp process_openai_frames(buffer, state, acc) do
+  defp process_openai_frames(buffer, state, rev_acc) do
     case next_sse_frame(buffer) do
       {frame, rest} ->
         case parse_openai_frame(frame) do
           {:ok, nil} ->
-            process_openai_frames(rest, state, acc)
+            process_openai_frames(rest, state, rev_acc)
 
           {:ok, chunk} ->
             {events, new_state} = stream_state_ingest(state, chunk)
-            process_openai_frames(rest, new_state, acc ++ events)
+            process_openai_frames(rest, new_state, Enum.reverse(events) ++ rev_acc)
         end
 
       nil ->
-        {acc, buffer, state}
+        {rev_acc, buffer, state}
     end
   end
 
@@ -405,23 +408,38 @@ defmodule Viber.API.Providers.OpenAICompat do
     end
   end
 
-  defp stream_state_new(model) do
-    %{
-      model: model,
-      message_started: false,
-      text_started: false,
-      text_finished: false,
-      finished: false,
-      stop_reason: nil,
-      usage: nil,
-      tool_calls: %{}
-    }
+  defmodule StreamState do
+    @moduledoc false
+
+    defstruct model: nil,
+              message_started: false,
+              text_started: false,
+              text_finished: false,
+              finished: false,
+              stop_reason: nil,
+              usage: nil,
+              tool_calls: %{}
   end
 
-  defp stream_state_ingest(state, chunk) do
-    events = []
+  defp stream_state_new(model) do
+    %StreamState{model: model}
+  end
 
+  @spec stream_events_from_chunks(String.t(), [map()]) :: [term()]
+  def stream_events_from_chunks(model, chunks) do
     {events, state} =
+      Enum.reduce(chunks, {[], stream_state_new(model)}, fn chunk, {acc, st} ->
+        {new_events, new_state} = stream_state_ingest(st, chunk)
+        {acc ++ new_events, new_state}
+      end)
+
+    events ++ stream_state_finish(state)
+  end
+
+  defp stream_state_ingest(%StreamState{} = state, chunk) do
+    rev_events = []
+
+    {rev_events, state} =
       if not state.message_started do
         event =
           {:message_start,
@@ -434,9 +452,9 @@ defmodule Viber.API.Providers.OpenAICompat do
              usage: %Usage{input_tokens: 0, output_tokens: 0}
            }}
 
-        {events ++ [event], %{state | message_started: true}}
+        {[event | rev_events], %{state | message_started: true}}
       else
-        {events, state}
+        {rev_events, state}
       end
 
     state =
@@ -450,117 +468,122 @@ defmodule Viber.API.Providers.OpenAICompat do
 
     choices = chunk["choices"] || []
 
-    Enum.reduce(choices, {events, state}, fn choice, {evts, st} ->
-      delta = choice["delta"] || %{}
+    {rev_events, state} =
+      Enum.reduce(choices, {rev_events, state}, fn choice, {evts, st} ->
+        delta = choice["delta"] || %{}
 
-      {evts, st} =
-        case delta["content"] do
-          nil ->
-            {evts, st}
+        {evts, st} =
+          case delta["content"] do
+            nil ->
+              {evts, st}
 
-          "" ->
-            {evts, st}
+            "" ->
+              {evts, st}
 
-          text ->
-            if not st.text_started do
-              start_event = {:content_block_start, 0, %{type: "text", text: ""}}
-              delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
-              {evts ++ [start_event, delta_event], %{st | text_started: true}}
-            else
-              delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
-              {evts ++ [delta_event], st}
-            end
-        end
-
-      tool_calls = delta["tool_calls"] || []
-
-      {evts, st} =
-        Enum.reduce(tool_calls, {evts, st}, fn tc, {e, s} ->
-          idx = tc["index"] || 0
-
-          existing =
-            Map.get(s.tool_calls, idx, %{
-              id: nil,
-              name: nil,
-              arguments: "",
-              started: false,
-              stopped: false
-            })
-
-          existing =
-            existing
-            |> then(fn ex -> if tc["id"], do: %{ex | id: tc["id"]}, else: ex end)
-            |> then(fn ex ->
-              case get_in(tc, ["function", "name"]) do
-                nil -> ex
-                name -> %{ex | name: name}
+            text ->
+              if not st.text_started do
+                delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
+                start_event = {:content_block_start, 0, %{type: "text", text: ""}}
+                {[delta_event, start_event | evts], %{st | text_started: true}}
+              else
+                delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
+                {[delta_event | evts], st}
               end
-            end)
-            |> then(fn ex ->
-              case get_in(tc, ["function", "arguments"]) do
-                nil -> ex
-                args -> %{ex | arguments: ex.arguments <> args}
+          end
+
+        tool_calls = delta["tool_calls"] || []
+
+        {evts, st} =
+          Enum.reduce(tool_calls, {evts, st}, fn tc, {e, s} ->
+            idx = tc["index"] || 0
+
+            existing =
+              Map.get(s.tool_calls, idx, %{
+                id: nil,
+                name: nil,
+                arguments: "",
+                started: false,
+                stopped: false
+              })
+
+            argument_delta = get_in(tc, ["function", "arguments"])
+
+            existing =
+              existing
+              |> then(fn ex -> if tc["id"], do: %{ex | id: tc["id"]}, else: ex end)
+              |> then(fn ex ->
+                case get_in(tc, ["function", "name"]) do
+                  nil -> ex
+                  name -> %{ex | name: name}
+                end
+              end)
+              |> then(fn ex ->
+                case argument_delta do
+                  nil -> ex
+                  args -> %{ex | arguments: ex.arguments <> args}
+                end
+              end)
+
+            block_index = idx + 1
+
+            {e, existing} =
+              if not existing.started and existing.name do
+                start =
+                  {:content_block_start, block_index,
+                   %{
+                     type: "tool_use",
+                     id: existing.id || "tool_call_#{idx}",
+                     name: existing.name,
+                     input: %{}
+                   }}
+
+                {[start | e], %{existing | started: true}}
+              else
+                {e, existing}
               end
-            end)
 
-          block_index = idx + 1
+            e =
+              if existing.started and is_binary(argument_delta) and argument_delta != "" do
+                delta_event =
+                  {:content_block_delta, block_index,
+                   %{type: "input_json_delta", partial_json: argument_delta}}
 
-          {e, existing} =
-            if not existing.started and existing.name do
-              start =
-                {:content_block_start, block_index,
-                 %{
-                   type: "tool_use",
-                   id: existing.id || "tool_call_#{idx}",
-                   name: existing.name,
-                   input: %{}
-                 }}
+                [delta_event | e]
+              else
+                e
+              end
 
-              {e ++ [start], %{existing | started: true}}
-            else
-              {e, existing}
-            end
+            s = %{s | tool_calls: Map.put(s.tool_calls, idx, existing)}
+            {e, s}
+          end)
 
-          e =
-            if existing.started and existing.arguments != "" do
-              delta_event =
-                {:content_block_delta, block_index,
-                 %{type: "input_json_delta", partial_json: existing.arguments}}
+        st =
+          case choice["finish_reason"] do
+            nil -> st
+            reason -> %{st | stop_reason: normalize_finish_reason(reason)}
+          end
 
-              e ++ [delta_event]
-            else
-              e
-            end
+        {evts, st}
+      end)
 
-          s = %{s | tool_calls: Map.put(s.tool_calls, idx, existing)}
-          {e, s}
-        end)
-
-      st =
-        case choice["finish_reason"] do
-          nil -> st
-          reason -> %{st | stop_reason: normalize_finish_reason(reason)}
-        end
-
-      {evts, st}
-    end)
+    {Enum.reverse(rev_events), state}
   end
 
-  defp stream_state_finish(state) do
+  defp stream_state_finish(%StreamState{} = state) do
     if state.finished or not state.message_started do
       []
     else
-      events = []
+      rev_events = []
 
-      events =
+      rev_events =
         if state.text_started and not state.text_finished do
-          events ++ [{:content_block_stop, 0}]
+          [{:content_block_stop, 0} | rev_events]
         else
-          events
+          rev_events
         end
 
-      events =
-        Enum.reduce(state.tool_calls, events, fn {idx, tc}, evts ->
+      rev_events =
+        Enum.reduce(state.tool_calls, rev_events, fn {idx, tc}, evts ->
           block_index = idx + 1
 
           evts =
@@ -569,13 +592,13 @@ defmodule Viber.API.Providers.OpenAICompat do
                 {:content_block_start, block_index,
                  %{type: "tool_use", id: tc.id || "tool_call_#{idx}", name: tc.name, input: %{}}}
 
-              evts ++ [start]
+              [start | evts]
             else
               evts
             end
 
           if (tc.started or tc.name) and not tc.stopped do
-            evts ++ [{:content_block_stop, block_index}]
+            [{:content_block_stop, block_index} | evts]
           else
             evts
           end
@@ -583,7 +606,7 @@ defmodule Viber.API.Providers.OpenAICompat do
 
       usage = state.usage || %Usage{input_tokens: 0, output_tokens: 0}
 
-      events ++
+      Enum.reverse(rev_events) ++
         [
           {:message_delta,
            %{"stop_reason" => state.stop_reason || "end_turn", "stop_sequence" => nil}, usage},

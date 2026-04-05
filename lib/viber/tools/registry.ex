@@ -3,7 +3,7 @@ defmodule Viber.Tools.Registry do
   Registry of built-in tool specifications with lookup and listing.
   """
 
-  alias Viber.Tools.Spec
+  alias Viber.Tools.{Builtins, Spec}
 
   @specs %{
     "bash" => %Spec{
@@ -19,7 +19,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["command"],
         "additionalProperties" => false
       },
-      permission: :danger_full_access
+      permission: :danger_full_access,
+      handler: &Builtins.Bash.execute/1
     },
     "read_file" => %Spec{
       name: "read_file",
@@ -34,7 +35,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["path"],
         "additionalProperties" => false
       },
-      permission: :read_only
+      permission: :read_only,
+      handler: &Builtins.FileOps.read/1
     },
     "write_file" => %Spec{
       name: "write_file",
@@ -48,7 +50,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["path", "content"],
         "additionalProperties" => false
       },
-      permission: :workspace_write
+      permission: :workspace_write,
+      handler: &Builtins.FileOps.write/1
     },
     "edit_file" => %Spec{
       name: "edit_file",
@@ -64,7 +67,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["path", "old_string", "new_string"],
         "additionalProperties" => false
       },
-      permission: :workspace_write
+      permission: :workspace_write,
+      handler: &Builtins.FileOps.edit/1
     },
     "glob_search" => %Spec{
       name: "glob_search",
@@ -78,7 +82,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["pattern"],
         "additionalProperties" => false
       },
-      permission: :read_only
+      permission: :read_only,
+      handler: &Builtins.Glob.execute/1
     },
     "grep_search" => %Spec{
       name: "grep_search",
@@ -103,7 +108,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["pattern"],
         "additionalProperties" => false
       },
-      permission: :read_only
+      permission: :read_only,
+      handler: &Builtins.Grep.execute/1
     },
     "ls" => %Spec{
       name: "ls",
@@ -118,7 +124,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["path"],
         "additionalProperties" => false
       },
-      permission: :read_only
+      permission: :read_only,
+      handler: &Builtins.LS.execute/1
     },
     "web_fetch" => %Spec{
       name: "web_fetch",
@@ -131,7 +138,79 @@ defmodule Viber.Tools.Registry do
         "required" => ["url"],
         "additionalProperties" => false
       },
-      permission: :read_only
+      permission: :read_only,
+      handler: &Builtins.WebFetch.execute/1
+    },
+    "multi_edit" => %Spec{
+      name: "multi_edit",
+      description:
+        "Apply multiple text replacements across one or more files atomically. " <>
+          "All edits are validated before any writes occur; if any edit fails, no files are modified.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "edits" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "path" => %{"type" => "string"},
+                "old_string" => %{"type" => "string"},
+                "new_string" => %{"type" => "string"},
+                "replace_all" => %{"type" => "boolean"}
+              },
+              "required" => ["path", "old_string", "new_string"],
+              "additionalProperties" => false
+            },
+            "minItems" => 1
+          }
+        },
+        "required" => ["edits"],
+        "additionalProperties" => false
+      },
+      permission: :workspace_write,
+      handler: &Builtins.MultiEdit.execute/1
+    },
+    "clipboard" => %Spec{
+      name: "clipboard",
+      description:
+        "Read from or write to the system clipboard. " <>
+          "Use action 'read' to get current clipboard contents, or 'write' with text to copy to clipboard.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["read", "write"]
+          },
+          "text" => %{"type" => "string"}
+        },
+        "required" => ["action"],
+        "additionalProperties" => false
+      },
+      permission: :danger_full_access,
+      handler: &Builtins.Clipboard.execute/1
+    },
+    "user_input" => %Spec{
+      name: "user_input",
+      description:
+        "Ask the user a question and wait for their response. " <>
+          "Use this to gather clarification or confirmation during a task. " <>
+          "Optionally provide a list of options for the user to choose from.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "question" => %{"type" => "string"},
+          "options" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"}
+          }
+        },
+        "required" => ["question"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.UserInput.execute/1
     }
   }
 
@@ -188,7 +267,7 @@ defmodule Viber.Tools.Registry do
 
   @spec unregister_mcp_tools(String.t()) :: :ok
   def unregister_mcp_tools(server_name) do
-    if :ets.whereis(@ets_table) != :undefined do
+    if ets_available?() do
       :ets.match_delete(@ets_table, {{server_name, :_}, :_})
     end
 
@@ -197,7 +276,7 @@ defmodule Viber.Tools.Registry do
 
   @spec mcp_specs() :: [Spec.t()]
   def mcp_specs do
-    if :ets.whereis(@ets_table) != :undefined do
+    if ets_available?() do
       :ets.tab2list(@ets_table) |> Enum.map(fn {_key, spec} -> spec end)
     else
       []
@@ -208,12 +287,15 @@ defmodule Viber.Tools.Registry do
   def normalize_name(name) do
     name
     |> String.trim()
+    |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
     |> String.downcase()
     |> String.replace("-", "_")
   end
 
+  defp ets_available?, do: :ets.whereis(@ets_table) != :undefined
+
   defp mcp_get(name) do
-    if :ets.whereis(@ets_table) != :undefined do
+    if ets_available?() do
       case :ets.match_object(@ets_table, {{:_, name}, :_}) do
         [{_key, spec} | _] -> spec
         [] -> nil
