@@ -1,0 +1,104 @@
+defmodule Viber.Commands.Registry do
+  @moduledoc """
+  Registry of slash command specifications with metadata and lookup.
+  """
+
+  alias Viber.Commands.Handlers
+
+  @type command_spec :: %{
+          name: String.t(),
+          aliases: [String.t()],
+          description: String.t(),
+          usage: String.t(),
+          category: :session | :config | :info | :project,
+          handler: module()
+        }
+
+  @specs [
+    %{
+      name: "help",
+      aliases: [],
+      description: "Show available slash commands",
+      usage: "/help [command]",
+      category: :info,
+      handler: Handlers.Help
+    },
+    %{
+      name: "status",
+      aliases: [],
+      description: "Show current session status",
+      usage: "/status",
+      category: :info,
+      handler: Handlers.Status
+    },
+    %{
+      name: "compact",
+      aliases: [],
+      description: "Compact conversation history",
+      usage: "/compact",
+      category: :session,
+      handler: Handlers.Compact
+    },
+    %{
+      name: "config",
+      aliases: [],
+      description: "Show current configuration",
+      usage: "/config [key]",
+      category: :config,
+      handler: Handlers.Config
+    },
+    %{
+      name: "model",
+      aliases: [],
+      description: "Show or switch the active model",
+      usage: "/model [model_name]",
+      category: :config,
+      handler: Handlers.Model
+    },
+    %{
+      name: "clear",
+      aliases: [],
+      description: "Clear session history",
+      usage: "/clear",
+      category: :session,
+      handler: Handlers.Clear
+    },
+    %{
+      name: "bug",
+      aliases: [],
+      description: "Generate a bug report template",
+      usage: "/bug",
+      category: :info,
+      handler: Handlers.Bug
+    },
+    %{
+      name: "init",
+      aliases: [],
+      description: "Initialize project configuration",
+      usage: "/init",
+      category: :project,
+      handler: Handlers.Init
+    }
+  ]
+
+  @by_name Map.new(@specs, fn spec -> {spec.name, spec} end)
+  @by_alias Enum.flat_map(@specs, fn spec ->
+              Enum.map(spec.aliases, fn a -> {a, spec} end)
+            end)
+            |> Map.new()
+  @lookup Map.merge(@by_alias, @by_name)
+
+  @spec all() :: [command_spec()]
+  def all, do: @specs
+
+  @spec get(String.t()) :: {:ok, command_spec()} | :error
+  def get(name) do
+    case Map.fetch(@lookup, String.downcase(name)) do
+      {:ok, _} = result -> result
+      :error -> :error
+    end
+  end
+
+  @spec names() :: [String.t()]
+  def names, do: Enum.map(@specs, & &1.name) |> Enum.sort()
+end
