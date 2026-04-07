@@ -159,38 +159,48 @@ defmodule Viber.Runtime.Conversation do
         Permissions.register_tool(pol, spec.name, spec.permission)
       end)
 
-    Enum.map(tool_uses, fn {id, name, input_map} ->
-      event_handler.({:tool_use_start, name, id})
+    Viber.TaskSupervisor
+    |> Task.Supervisor.async_stream_nolink(
+      tool_uses,
+      fn {id, name, input_map} ->
+        event_handler.({:tool_use_start, name, id})
 
-      input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
+        input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
 
-      case Permissions.check(policy, name, input_str) do
-        permission when permission in [:allow, :prompt] ->
-          allowed =
-            permission == :allow || Permissions.prompt_user(name, input_str)
+        case Permissions.check(policy, name, input_str) do
+          permission when permission in [:allow, :prompt] ->
+            allowed =
+              permission == :allow || Permissions.prompt_user(name, input_str)
 
-          if allowed do
-            input = ensure_parsed_input(input_map)
+            if allowed do
+              input = ensure_parsed_input(input_map)
 
-            case Executor.execute(name, input) do
-              {:ok, output} ->
-                event_handler.({:tool_result, name, output, false})
-                {id, name, output, false}
+              case Executor.execute(name, input) do
+                {:ok, output} ->
+                  event_handler.({:tool_result, name, output, false})
+                  {id, name, output, false}
 
-              {:error, error} ->
-                event_handler.({:tool_result, name, error, true})
-                {id, name, error, true}
+                {:error, error} ->
+                  event_handler.({:tool_result, name, error, true})
+                  {id, name, error, true}
+              end
+            else
+              reason = "tool '#{name}' denied by user"
+              event_handler.({:tool_result, name, reason, true})
+              {id, name, reason, true}
             end
-          else
-            reason = "tool '#{name}' denied by user"
+
+          {:deny, reason} ->
             event_handler.({:tool_result, name, reason, true})
             {id, name, reason, true}
-          end
-
-        {:deny, reason} ->
-          event_handler.({:tool_result, name, reason, true})
-          {id, name, reason, true}
-      end
+        end
+      end,
+      ordered: true,
+      timeout: 120_000
+    )
+    |> Enum.map(fn
+      {:ok, result} -> result
+      {:exit, reason} -> {nil, "unknown", "Tool execution failed: #{inspect(reason)}", true}
     end)
   end
 

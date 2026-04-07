@@ -229,6 +229,79 @@ defmodule Viber.Tools.Registry do
       },
       permission: :read_only,
       handler: &Builtins.UserInput.execute/1
+    },
+    "mix_task" => %Spec{
+      name: "mix_task",
+      description:
+        "Run an arbitrary Mix task with optional arguments and a configurable timeout.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "task" => %{"type" => "string"},
+          "args" => %{"type" => "array", "items" => %{"type" => "string"}},
+          "timeout" => %{"type" => "integer", "minimum" => 1}
+        },
+        "required" => ["task"],
+        "additionalProperties" => false
+      },
+      permission: :danger_full_access,
+      handler: &Builtins.MixTask.execute/1
+    },
+    "test_runner" => %Spec{
+      name: "test_runner",
+      description:
+        "Run `mix test` with optional path/line targeting and return a parsed summary of results. " <>
+          "Provides structured output with pass/fail status, test counts, and failure details.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "line" => %{"type" => "integer", "minimum" => 1},
+          "args" => %{"type" => "array", "items" => %{"type" => "string"}},
+          "timeout" => %{"type" => "integer", "minimum" => 1}
+        },
+        "required" => [],
+        "additionalProperties" => false
+      },
+      permission: :workspace_write,
+      handler: &Builtins.TestRunner.execute/1
+    },
+    "diagnostics" => %Spec{
+      name: "diagnostics",
+      description:
+        "Run static analysis (Dialyzer or Credo) and return structured findings. " <>
+          "Use tool 'dialyzer' for type checking and 'credo' for code style/quality issues. " <>
+          "Optionally scope results to a specific file path.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "tool" => %{"type" => "string", "enum" => ["dialyzer", "credo"]},
+          "path" => %{"type" => "string"}
+        },
+        "required" => ["tool"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.Diagnostics.execute/1
+    },
+    "formatter" => %Spec{
+      name: "formatter",
+      description:
+        "Apply `mix format` to a file path or an inline Elixir code snippet. " <>
+          "Provide 'path' to format a file on disk, or 'content' to format a code string and get back the formatted result. " <>
+          "Set 'check_only' to true to check formatting without writing changes.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "content" => %{"type" => "string"},
+          "check_only" => %{"type" => "boolean"}
+        },
+        "required" => [],
+        "additionalProperties" => false
+      },
+      permission: :workspace_write,
+      handler: &Builtins.Formatter.execute/1
     }
   }
 

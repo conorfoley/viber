@@ -8,6 +8,7 @@ defmodule Viber.CLI.Repl do
   alias Viber.CLI.Renderer
   alias Viber.Commands.Parser
   alias Viber.Runtime.Conversation
+  alias Viber.Runtime.FileRefs
 
   defmodule State do
     @moduledoc false
@@ -104,6 +105,8 @@ defmodule Viber.CLI.Repl do
   defp handle_message(input, state) do
     Logger.info("Repl: sending message, model=#{state.model}")
 
+    input = expand_file_refs(input, state)
+
     spinner_ref = make_ref()
     spinner_active = :atomics.new(1, signed: false)
     :atomics.put(spinner_active, 1, 1)
@@ -193,7 +196,25 @@ defmodule Viber.CLI.Repl do
       session: state.session,
       model: state.model,
       config: state.config,
-      permission_mode: state.permission_mode
+      permission_mode: state.permission_mode,
+      project_root: state.project_root
     }
+  end
+
+  defp expand_file_refs(input, state) do
+    project_root = state.project_root || File.cwd!()
+
+    Regex.replace(~r/@([^\s]+)/, input, fn full_token, pattern ->
+      results = FileRefs.resolve_pattern(pattern, project_root)
+      {combined, errors} = FileRefs.format_results(results)
+
+      Enum.each(errors, fn err -> IO.puts("Warning: #{err}") end)
+
+      if combined == "" do
+        full_token
+      else
+        combined
+      end
+    end)
   end
 end

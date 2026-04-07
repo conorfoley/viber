@@ -36,3 +36,5 @@ viber-*.tar
 .DS_Store
 
 .idea/
+
+agent_docs/

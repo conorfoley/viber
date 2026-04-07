@@ -78,6 +78,14 @@ defmodule Viber.Commands.Registry do
       usage: "/init",
       category: :project,
       handler: Handlers.Init
+    },
+    %{
+      name: "attach",
+      aliases: [],
+      description: "Attach file(s) or glob patterns as context for the LLM",
+      usage: "/attach <path|glob> [...]",
+      category: :session,
+      handler: Handlers.Attach
     }
   ]
 

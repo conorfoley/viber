@@ -97,12 +97,29 @@ defmodule Viber.Tools.MCP.ServerManager do
   defp mcp_tool_to_spec(server_name, tool) do
     normalized_server = Viber.Tools.Registry.normalize_name(server_name)
     normalized_tool = Viber.Tools.Registry.normalize_name(tool["name"] || "")
+    original_tool_name = tool["name"] || ""
+    captured_server_name = server_name
+
+    handler = fn input ->
+      call_mcp_tool(captured_server_name, original_tool_name, input)
+    end
 
     %Spec{
       name: "mcp__#{normalized_server}__#{normalized_tool}",
       description: tool["description"] || "",
       input_schema: tool["inputSchema"] || %{"type" => "object", "properties" => %{}},
-      permission: :workspace_write
+      permission: :workspace_write,
+      handler: handler
     }
+  end
+
+  defp call_mcp_tool(server_name, tool_name, input) do
+    case Registry.lookup(Viber.MCPRegistry, server_name) do
+      [{pid, _}] ->
+        Client.call_tool(pid, tool_name, input)
+
+      [] ->
+        {:error, "MCP server '#{server_name}' is not running"}
+    end
   end
 end
