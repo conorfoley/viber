@@ -9,7 +9,7 @@ defmodule Viber.Tools.Builtins.TestRunner do
   @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(input) when is_map(input) do
     args = build_args(input)
-    timeout_ms = input["timeout"] || @default_timeout
+    timeout_ms = normalize_timeout(input["timeout"])
     start = System.monotonic_time(:millisecond)
 
     task_ref =
@@ -107,4 +107,8 @@ defmodule Viber.Tools.Builtins.TestRunner do
         end)
     end
   end
+
+  defp normalize_timeout(nil), do: @default_timeout
+  defp normalize_timeout(val) when is_integer(val), do: val * 1_000
+  defp normalize_timeout(_), do: @default_timeout
 end

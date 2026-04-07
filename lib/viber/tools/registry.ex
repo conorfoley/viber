@@ -13,7 +13,11 @@ defmodule Viber.Tools.Registry do
         "type" => "object",
         "properties" => %{
           "command" => %{"type" => "string"},
-          "timeout" => %{"type" => "integer", "minimum" => 1},
+          "timeout" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Timeout in seconds"
+          },
           "description" => %{"type" => "string"}
         },
         "required" => ["command"],
@@ -239,7 +243,11 @@ defmodule Viber.Tools.Registry do
         "properties" => %{
           "task" => %{"type" => "string"},
           "args" => %{"type" => "array", "items" => %{"type" => "string"}},
-          "timeout" => %{"type" => "integer", "minimum" => 1}
+          "timeout" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Timeout in seconds"
+          }
         },
         "required" => ["task"],
         "additionalProperties" => false
@@ -258,12 +266,16 @@ defmodule Viber.Tools.Registry do
           "path" => %{"type" => "string"},
           "line" => %{"type" => "integer", "minimum" => 1},
           "args" => %{"type" => "array", "items" => %{"type" => "string"}},
-          "timeout" => %{"type" => "integer", "minimum" => 1}
+          "timeout" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Timeout in seconds"
+          }
         },
         "required" => [],
         "additionalProperties" => false
       },
-      permission: :workspace_write,
+      permission: :read_only,
       handler: &Builtins.TestRunner.execute/1
     },
     "diagnostics" => %Spec{
@@ -283,6 +295,38 @@ defmodule Viber.Tools.Registry do
       },
       permission: :read_only,
       handler: &Builtins.Diagnostics.execute/1
+    },
+    "git" => %Spec{
+      name: "git",
+      description:
+        "Run a git command in the current workspace. " <>
+          "Provide a subcommand (e.g., 'status', 'log', 'diff', 'add', 'commit', 'checkout', 'stash') " <>
+          "and optional args. Read-only subcommands (status, log, diff, show, branch, blame, etc.) " <>
+          "are safe; write subcommands (add, commit, checkout, reset, etc.) modify repository state.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "subcommand" => %{
+            "type" => "string",
+            "description" => "The git subcommand to run (e.g., status, log, diff, add, commit)"
+          },
+          "args" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Additional arguments to pass to the git subcommand"
+          },
+          "timeout" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Timeout in seconds"
+          }
+        },
+        "required" => ["subcommand"],
+        "additionalProperties" => false
+      },
+      permission: :workspace_write,
+      permission_fn: &Builtins.Git.permission_for/1,
+      handler: &Builtins.Git.execute/1
     },
     "formatter" => %Spec{
       name: "formatter",

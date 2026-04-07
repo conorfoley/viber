@@ -153,7 +153,11 @@ defmodule Viber.Runtime.Conversation do
   end
 
   defp execute_tools(tool_uses, permission_mode, event_handler) do
-    policy =
+    specs_by_name =
+      Registry.builtin_specs()
+      |> Map.new(fn spec -> {spec.name, spec} end)
+
+    base_policy =
       Enum.reduce(Registry.builtin_specs(), Permissions.new_policy(permission_mode), fn spec,
                                                                                         pol ->
         Permissions.register_tool(pol, spec.name, spec.permission)
@@ -166,6 +170,17 @@ defmodule Viber.Runtime.Conversation do
         event_handler.({:tool_use_start, name, id})
 
         input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
+        input = ensure_parsed_input(input_map)
+
+        policy =
+          case Map.get(specs_by_name, name) do
+            %Spec{permission_fn: fun} = spec when fun != nil ->
+              effective = Spec.effective_permission(spec, input)
+              Permissions.register_tool(base_policy, name, effective)
+
+            _ ->
+              base_policy
+          end
 
         case Permissions.check(policy, name, input_str) do
           permission when permission in [:allow, :prompt] ->

@@ -24,7 +24,13 @@ defmodule Viber.Tools.Builtins.MixTaskTest do
   end
 
   test "timeout returns timeout result" do
-    assert {:ok, result} = MixTask.execute(%{"task" => "help", "timeout" => 1})
+    assert {:ok, result} =
+             MixTask.execute(%{
+               "task" => "run",
+               "args" => ["--eval", "Process.sleep(10_000)"],
+               "timeout" => 1
+             })
+
     assert result =~ "Exit code: timeout"
     assert result =~ "Task exceeded timeout"
   end

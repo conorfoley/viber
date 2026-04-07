@@ -93,9 +93,22 @@ defmodule Viber.Tools.Builtins.TestRunnerTest do
 
   describe "execute/1 — timeout" do
     test "returns error status on timeout" do
-      assert {:ok, result} = TestRunner.execute(%{"timeout" => 1})
-      assert result =~ "Status: error"
+      tmp_dir = System.tmp_dir!()
+      test_file = Path.join(tmp_dir, "viber_slow_test.exs")
+
+      File.write!(test_file, """
+      defmodule Viber.SlowTimeoutTest do
+        use ExUnit.Case
+        test "slow" do
+          Process.sleep(30_000)
+        end
+      end
+      """)
+
+      assert {:ok, result} = TestRunner.execute(%{"path" => test_file, "timeout" => 1})
       assert result =~ "exceeded timeout"
+    after
+      File.rm(Path.join(System.tmp_dir!(), "viber_slow_test.exs"))
     end
   end
 
