@@ -74,9 +74,16 @@ defmodule Viber.Tools.Builtins.Diagnostics do
   defp filter_by_path(findings, nil), do: findings
 
   defp filter_by_path(findings, path) do
+    abs_path = Path.expand(path)
+
     Enum.filter(findings, fn
-      {:dialyzer, file, _, _} -> String.starts_with?(file, path)
-      {:credo, _, file, _, _} -> String.starts_with?(file, path)
+      {:dialyzer, file, _, _} ->
+        abs_file = Path.expand(file)
+        String.starts_with?(abs_file, abs_path)
+
+      {:credo, _, file, _, _} ->
+        abs_file = Path.expand(file)
+        String.starts_with?(abs_file, abs_path)
     end)
   end
 

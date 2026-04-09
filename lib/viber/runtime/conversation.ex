@@ -202,33 +202,43 @@ defmodule Viber.Runtime.Conversation do
         end
       end)
 
-    ctx.task_supervisor
-    |> Task.Supervisor.async_stream_nolink(
-      decisions,
-      fn
-        {:run, id, name, input} ->
-          event_handler.({:tool_use_start, name, id})
+    stream_results =
+      ctx.task_supervisor
+      |> Task.Supervisor.async_stream_nolink(
+        decisions,
+        fn
+          {:run, id, name, input} ->
+            event_handler.({:tool_use_start, name, id})
 
-          case Executor.execute(name, input) do
-            {:ok, output} ->
-              event_handler.({:tool_result, name, output, false})
-              {id, name, output, false}
+            case Executor.execute(name, input) do
+              {:ok, output} ->
+                event_handler.({:tool_result, name, output, false})
+                {id, name, output, false}
 
-            {:error, error} ->
-              event_handler.({:tool_result, name, error, true})
-              {id, name, error, true}
-          end
+              {:error, error} ->
+                event_handler.({:tool_result, name, error, true})
+                {id, name, error, true}
+            end
 
-        {:denied, id, name, reason} ->
-          event_handler.({:tool_result, name, reason, true})
-          {id, name, reason, true}
-      end,
-      ordered: true,
-      timeout: 120_000
-    )
+          {:denied, id, name, reason} ->
+            event_handler.({:tool_result, name, reason, true})
+            {id, name, reason, true}
+        end,
+        ordered: true,
+        timeout: 120_000
+      )
+      |> Enum.to_list()
+
+    Enum.zip(decisions, stream_results)
     |> Enum.map(fn
-      {:ok, result} -> result
-      {:exit, reason} -> {nil, "unknown", "Tool execution failed: #{inspect(reason)}", true}
+      {_, {:ok, result}} ->
+        result
+
+      {{:run, id, name, _}, {:exit, reason}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+
+      {{:denied, id, name, _}, {:exit, reason}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
     end)
   end
 
@@ -342,7 +352,7 @@ defmodule Viber.Runtime.Conversation do
 
   defp process_event({:stream_error, e}, acc, handler) do
     Logger.error("Conversation: stream error received: #{inspect(e)}")
-    handler.({:error, "Stream interrupted: #{Exception.message(e)}"})
+    handler.({:error, "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"})
     %{acc | stream_error: e}
   end
 

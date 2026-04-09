@@ -14,9 +14,14 @@ defmodule Viber.Commands.Handlers.Compact do
     else
       before_count = length(Session.get_messages(session))
 
-      {:ok, removed} = Compact.compact(session)
-      after_count = length(Session.get_messages(session))
-      {:ok, "Compacted: #{before_count} → #{after_count} messages (#{removed} removed)"}
+      case Compact.compact(session) do
+        {:ok, removed} ->
+          after_count = length(Session.get_messages(session))
+          {:ok, "Compacted: #{before_count} → #{after_count} messages (#{removed} removed)"}
+
+        {:error, reason} ->
+          {:error, "Compaction failed: #{inspect(reason)}"}
+      end
     end
   end
 end

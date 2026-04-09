@@ -10,8 +10,13 @@ defmodule Viber.Server.Router do
   plug(:dispatch)
 
   post "/sessions" do
-    {:ok, session} = Viber.Server.SessionHandler.create_session(conn.body_params)
-    send_json(conn, 201, session)
+    case Viber.Server.SessionHandler.create_session(conn.body_params) do
+      {:ok, session} ->
+        send_json(conn, 201, session)
+
+      {:error, reason} ->
+        send_json(conn, 500, %{error: inspect(reason)})
+    end
   end
 
   post "/sessions/:id/message" do
@@ -27,7 +32,7 @@ defmodule Viber.Server.Router do
   get "/sessions/:id/events" do
     case Viber.Server.SessionHandler.get_session(id) do
       {:ok, _pid} ->
-        Viber.Server.SSE.stream(conn, id, %{})
+        send_json(conn, 200, %{status: "ok", message: "Use POST /sessions/:id/message to send a message and stream events"})
 
       {:error, :not_found} ->
         send_json(conn, 404, %{error: "Session not found"})

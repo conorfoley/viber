@@ -32,6 +32,11 @@ defmodule Viber.Tools.MCP.Server do
     GenServer.call(server, {:request, method, params}, 30_000)
   end
 
+  @spec notify(pid() | GenServer.name(), String.t(), map()) :: :ok
+  def notify(server, method, params) do
+    GenServer.cast(server, {:notify, method, params})
+  end
+
   @spec get_tools(pid() | GenServer.name()) :: [map()]
   def get_tools(server) do
     GenServer.call(server, :get_tools)
@@ -73,7 +78,13 @@ defmodule Viber.Tools.MCP.Server do
       tools: []
     }
 
-    {:ok, state}
+    {:ok, state, {:continue, :discover_tools}}
+  end
+
+  @impl true
+  def handle_continue(:discover_tools, state) do
+    Viber.Tools.MCP.ServerManager.rediscover(self(), state.server_name)
+    {:noreply, state}
   end
 
   @impl true
@@ -97,6 +108,13 @@ defmodule Viber.Tools.MCP.Server do
   end
 
   @impl true
+  def handle_cast({:notify, method, params}, state) do
+    data = Protocol.encode_notification(method, params)
+    Port.command(state.port, data)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
     buffer = state.buffer <> data
     {messages, remaining} = split_messages(buffer)
@@ -111,6 +129,22 @@ defmodule Viber.Tools.MCP.Server do
             handle_response(acc, id, {:error, msg.error})
 
           {:ok, %{type: :notification}} ->
+            acc
+
+          {:ok, %{type: :request, id: req_id, method: "ping"}} ->
+            reply = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => %{}}) <> "\n"
+            Port.command(acc.port, reply)
+            acc
+
+          {:ok, %{type: :request, id: req_id}} ->
+            error_reply =
+              Jason.encode!(%{
+                "jsonrpc" => "2.0",
+                "id" => req_id,
+                "error" => %{"code" => -32601, "message" => "Method not found"}
+              }) <> "\n"
+
+            Port.command(acc.port, error_reply)
             acc
 
           _ ->

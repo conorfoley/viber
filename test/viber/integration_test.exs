@@ -178,7 +178,7 @@ defmodule Viber.IntegrationTest do
     {:ok, ^path} = Session.save(session)
     {:ok, loaded} = Session.load(path)
     assert length(loaded.messages) == 2
-    assert hd(loaded.messages).role == :user
+    assert List.last(loaded.messages).role == :user
 
     File.rm_rf!(dir)
   end

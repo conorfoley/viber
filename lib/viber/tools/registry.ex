@@ -379,8 +379,10 @@ defmodule Viber.Tools.Registry do
 
   @spec init_mcp_table() :: :ok
   def init_mcp_table do
-    if :ets.whereis(@ets_table) == :undefined do
+    try do
       :ets.new(@ets_table, [:named_table, :set, :public])
+    rescue
+      ArgumentError -> :already_exists
     end
 
     :ok

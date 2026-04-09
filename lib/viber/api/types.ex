@@ -55,7 +55,11 @@ defmodule Viber.API.Types do
     :message_stop
   end
 
-  @spec decode_usage(map()) :: Viber.API.Usage.t()
+  def decode_stream_event(_unknown), do: nil
+
+  @spec decode_usage(map() | nil) :: Viber.API.Usage.t()
+  def decode_usage(nil), do: %Viber.API.Usage{input_tokens: 0, output_tokens: 0}
+
   def decode_usage(json) when is_map(json) do
     %Viber.API.Usage{
       input_tokens: json["input_tokens"],

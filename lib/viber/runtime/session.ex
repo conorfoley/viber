@@ -237,8 +237,6 @@ defmodule Viber.Runtime.Session do
     %{state | persist_timer: timer}
   end
 
-  defp do_persist(%{messages: []} = _state), do: :ok
-
   defp do_persist(state) do
     messages = Enum.reverse(state.messages)
 
@@ -282,7 +280,7 @@ defmodule Viber.Runtime.Session do
     %__MODULE__{
       id: data["id"] || generate_id(),
       version: data["version"] || 1,
-      messages: messages,
+      messages: Enum.reverse(messages),
       cumulative_usage: recompute_usage(messages),
       storage_path: path
     }

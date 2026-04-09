@@ -9,9 +9,10 @@ defmodule Viber.Tools.Builtins.Grep do
   def execute(%{"pattern" => pattern} = input) do
     args = build_args(pattern, input)
     search_path = input["path"] || "."
+    offset = input["offset"] || 0
 
     case System.cmd("rg", args ++ [search_path], stderr_to_stdout: true) do
-      {output, 0} -> {:ok, String.trim(output)}
+      {output, 0} -> {:ok, output |> String.trim() |> apply_offset(offset)}
       {output, 1} -> {:ok, "No matches found.\n#{String.trim(output)}"}
       {output, _} -> {:error, "rg error: #{String.trim(output)}"}
     end
@@ -46,6 +47,15 @@ defmodule Viber.Tools.Builtins.Grep do
     else
       base
     end
+  end
+
+  defp apply_offset(output, 0), do: output
+
+  defp apply_offset(output, offset) do
+    output
+    |> String.split("\n")
+    |> Enum.drop(offset)
+    |> Enum.join("\n")
   end
 
   defp mode_flags(%{"output_mode" => "content"}), do: []

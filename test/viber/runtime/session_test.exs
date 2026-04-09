@@ -145,7 +145,7 @@ defmodule Viber.Runtime.SessionTest do
       {:ok, restored} = Session.load(path)
       assert length(restored.messages) == 3
 
-      [user_msg, assistant_msg, tool_msg] = restored.messages
+      [tool_msg, assistant_msg, user_msg] = restored.messages
       assert user_msg.role == :user
       assert user_msg.blocks == [{:text, "hello"}]
 

@@ -71,6 +71,7 @@ defmodule Viber.API.SSEParser do
       {event_name, data_lines} =
         trimmed
         |> String.split("\n")
+        |> Enum.map(&String.trim_trailing(&1, "\r"))
         |> Enum.reduce({nil, []}, fn line, {ev, data} ->
           cond do
             String.starts_with?(line, ":") ->
@@ -102,7 +103,10 @@ defmodule Viber.API.SSEParser do
           else
             case Jason.decode(payload) do
               {:ok, json} ->
-                {:ok, Viber.API.Types.decode_stream_event(json)}
+                case Viber.API.Types.decode_stream_event(json) do
+                  nil -> {:ok, nil}
+                  event -> {:ok, event}
+                end
 
               {:error, reason} ->
                 {:error, %Viber.API.Error{type: :json, message: "json error: #{inspect(reason)}"}}

@@ -77,7 +77,7 @@ defmodule Viber.CLI.Repl do
               {:ok, output} ->
                 IO.puts(output)
 
-                if name == "model" and args != [] do
+                if name == "model" and args != [] and List.first(args) != "list" do
                   new_model = List.first(args)
                   Viber.Runtime.Session.set_model(state.session, new_model)
                   %{state | model: new_model}
@@ -200,12 +200,17 @@ defmodule Viber.CLI.Repl do
   end
 
   defp build_command_context(state) do
+    mcp_servers =
+      Viber.Tools.MCP.ServerManager.list_servers()
+      |> Map.new(fn {name, pid} -> {name, pid} end)
+
     %{
       session: state.session,
       model: state.model,
       config: state.config,
       permission_mode: state.permission_mode,
-      project_root: state.project_root
+      project_root: state.project_root,
+      mcp_servers: mcp_servers
     }
   end
 

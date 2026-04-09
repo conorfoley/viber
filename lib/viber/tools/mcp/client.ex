@@ -24,6 +24,17 @@ defmodule Viber.Tools.MCP.Client do
     params = Protocol.tool_call_params(name, arguments)
 
     case Server.request(server, "tools/call", params) do
+      {:ok, %{"isError" => true, "content" => content}} ->
+        text =
+          content
+          |> Enum.filter(fn c -> c["type"] == "text" end)
+          |> Enum.map_join("\n", fn c -> c["text"] end)
+
+        {:error, if(text == "", do: "MCP tool returned an error", else: text)}
+
+      {:ok, %{"isError" => true} = result} ->
+        {:error, inspect(result)}
+
       {:ok, %{"content" => content}} ->
         text =
           content
@@ -31,9 +42,6 @@ defmodule Viber.Tools.MCP.Client do
           |> Enum.map_join("\n", fn c -> c["text"] end)
 
         {:ok, text}
-
-      {:ok, %{"isError" => true} = result} ->
-        {:error, inspect(result)}
 
       {:ok, result} ->
         {:ok, inspect(result)}

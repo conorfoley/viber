@@ -107,10 +107,10 @@ defmodule Viber.API.Providers.OpenAICompat do
       if request.system && request.system != "" do
         [
           %{role: "system", content: request.system}
-          | Enum.map(request.messages, &translate_message/1)
+          | Enum.flat_map(request.messages, &translate_message/1)
         ]
       else
-        Enum.map(request.messages, &translate_message/1)
+        Enum.flat_map(request.messages, &translate_message/1)
       end
 
     token_limit_key =
@@ -368,6 +368,8 @@ defmodule Viber.API.Providers.OpenAICompat do
                 {:error, e} ->
                   {[{:stream_error, e}], :done}
               end
+          after
+            60_000 -> {[{:stream_error, :timeout}], :done}
           end
       end,
       fn _ -> :ok end
@@ -390,6 +392,8 @@ defmodule Viber.API.Providers.OpenAICompat do
             {^ref, :done} ->
               events = OpenAIStreamState.finish(state)
               {events, :done}
+          after
+            60_000 -> {[{:stream_error, :timeout}], :done}
           end
       end,
       fn _ -> :ok end

@@ -19,14 +19,6 @@ defmodule Viber.Tools.MCP.ServerManager do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
-  def terminate(_reason, _state) do
-    for {name, _pid} <- list_servers() do
-      stop_server(name)
-    end
-
-    :ok
-  end
-
   @spec start_servers(Viber.Runtime.Config.t()) :: {:ok, non_neg_integer()}
   def start_servers(config) do
     started =
@@ -43,17 +35,23 @@ defmodule Viber.Tools.MCP.ServerManager do
     opts = [server_name: name, command: command, args: args, env: env]
 
     case DynamicSupervisor.start_child(__MODULE__, {Server, opts}) do
-      {:ok, pid} ->
-        discover_tools(pid, name)
-        {:ok, pid}
-
-      {:error, _} = err ->
-        err
+      {:ok, pid} -> {:ok, pid}
+      {:error, _} = err -> err
     end
   end
 
   def start_server(_name, _config) do
     {:error, :unsupported_transport}
+  end
+
+  @doc false
+  @spec rediscover(pid(), String.t()) :: :ok
+  def rediscover(pid, server_name) do
+    Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
+      discover_tools(pid, server_name)
+    end)
+
+    :ok
   end
 
   @spec stop_server(String.t()) :: :ok | {:error, term()}
@@ -85,7 +83,7 @@ defmodule Viber.Tools.MCP.ServerManager do
   defp discover_tools(pid, server_name) do
     case Client.initialize(pid) do
       {:ok, _} ->
-        Server.request(pid, "notifications/initialized", %{})
+        Server.notify(pid, "notifications/initialized", %{})
 
         case Client.list_tools(pid) do
           {:ok, tools} ->

@@ -6,7 +6,7 @@ defmodule Viber.Runtime.Compact do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.Session
+  alias Viber.Runtime.{Session, Usage}
 
   @chars_per_token 4
   @default_token_threshold 100_000
@@ -53,12 +53,17 @@ defmodule Viber.Runtime.Compact do
     else
       {old_messages, recent} = Enum.split(messages, length(messages) - preserve)
 
+      old_usage =
+        Enum.reduce(old_messages, %Usage{}, fn msg, acc ->
+          if msg[:usage], do: Usage.add(acc, msg.usage), else: acc
+        end)
+
       case build_summary(old_messages, model) do
         {:ok, summary_text} ->
           summary_msg = %{
-            role: :user,
+            role: :assistant,
             blocks: [{:text, summary_text}],
-            usage: nil
+            usage: old_usage
           }
 
           new_messages = [summary_msg | recent]
@@ -73,9 +78,9 @@ defmodule Viber.Runtime.Compact do
           fallback_text = build_fallback_summary(old_messages)
 
           summary_msg = %{
-            role: :user,
+            role: :assistant,
             blocks: [{:text, fallback_text}],
-            usage: nil
+            usage: old_usage
           }
 
           new_messages = [summary_msg | recent]

@@ -95,16 +95,12 @@ defmodule Viber.Tools.Builtins.TestRunner do
   end
 
   defp parse_failures(output) do
-    case Regex.run(~r/\n(\s+1\) .+?)(?:\n\nFinished|\nRandomized|\z)/s, output) do
+    case Regex.run(~r/\n(\s+\d+\) .+?)(?:\n\nFinished|\nRandomized|\z)/s, output) do
       nil ->
         ""
 
       [_, block] ->
-        block
-        |> String.trim()
-        |> then(fn trimmed ->
-          if trimmed == "", do: "", else: trimmed
-        end)
+        String.trim(block)
     end
   end
 

@@ -1,5 +1,5 @@
 defmodule Viber.API.ClientTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Viber.API.{Client, Error, InputMessage, MessageRequest, MessageResponse, Usage}
 

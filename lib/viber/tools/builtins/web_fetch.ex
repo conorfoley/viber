@@ -32,10 +32,11 @@ defmodule Viber.Tools.Builtins.WebFetch do
     if uri.scheme in ["http", "https"] do
       case Req.get(url: url, receive_timeout: 10_000) do
         {:ok, %{status: status, body: body}} when status in 200..299 ->
+          body_str = if is_binary(body), do: body, else: Jason.encode!(body)
+
           content =
-            body
-            |> to_string()
-            |> maybe_strip_html(content_type(body))
+            body_str
+            |> maybe_strip_html(content_type(body_str))
             |> truncate()
 
           {:ok, content}
