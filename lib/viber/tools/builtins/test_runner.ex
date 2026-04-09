@@ -77,7 +77,7 @@ defmodule Viber.Tools.Builtins.TestRunner do
   end
 
   defp status_from_exit_code(0), do: "passed"
-  defp status_from_exit_code(1), do: "failed"
+  defp status_from_exit_code(2), do: "failed"
   defp status_from_exit_code(_), do: "error"
 
   defp parse_summary(output) do

@@ -20,9 +20,19 @@ defmodule Viber.CLI.Main do
           config: :string,
           port: :integer,
           help: :boolean,
-          verbose: :boolean
+          version: :boolean,
+          verbose: :boolean,
+          resume: :string
         ],
-        aliases: [m: :model, p: :permission_mode, c: :config, h: :help, v: :verbose]
+        aliases: [
+          m: :model,
+          p: :permission_mode,
+          c: :config,
+          h: :help,
+          V: :version,
+          v: :verbose,
+          r: :resume
+        ]
       )
 
     if opts[:verbose] do
@@ -32,6 +42,9 @@ defmodule Viber.CLI.Main do
     cond do
       opts[:help] ->
         print_usage()
+
+      opts[:version] ->
+        IO.puts("viber #{Application.spec(:viber, :vsn)}")
 
       match?(["init" | _], rest) ->
         Init.run(File.cwd!())
@@ -67,7 +80,27 @@ defmodule Viber.CLI.Main do
 
     ServerManager.start_servers(config)
 
-    {:ok, session} = Session.start_link()
+    project_root = File.cwd!()
+
+    {:ok, session} =
+      if opts[:resume] do
+        case Session.resume(opts[:resume]) do
+          {:ok, pid} ->
+            msg_count = length(Session.get_messages(pid))
+            IO.puts("Resumed session #{opts[:resume]} (#{msg_count} messages)")
+            {:ok, pid}
+
+          {:error, :not_found} ->
+            IO.puts("Session not found: #{opts[:resume]}. Starting new session.")
+            Session.start_link(model: model, project_root: project_root)
+
+          {:error, reason} ->
+            IO.puts("Failed to resume: #{inspect(reason)}. Starting new session.")
+            Session.start_link(model: model, project_root: project_root)
+        end
+      else
+        Session.start_link(model: model, project_root: project_root)
+      end
 
     IO.puts(welcome_banner(resolved_model, permission_mode, log_path))
 
@@ -76,7 +109,7 @@ defmodule Viber.CLI.Main do
       model: model,
       config: config,
       permission_mode: permission_mode,
-      project_root: File.cwd!()
+      project_root: project_root
     )
   end
 
@@ -155,7 +188,9 @@ defmodule Viber.CLI.Main do
       -m, --model MODEL              Set the model (default: sonnet)
       -p, --permission-mode MODE     Set permission mode
       -c, --config PATH              Config file path
+      -r, --resume SESSION_ID        Resume a previous session
       -v, --verbose                  Enable debug logging
+      -V, --version                  Show version
       -h, --help                     Show this help
     """)
   end

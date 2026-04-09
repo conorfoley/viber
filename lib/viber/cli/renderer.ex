@@ -129,7 +129,8 @@ defmodule Viber.CLI.Renderer do
       )
       |> Owl.Data.to_chardata()
 
-    [box, IO.ANSI.faint(), " ", id, IO.ANSI.reset(), "\n"]
+    _ = id
+    ["\n", box, "\n"]
   end
 
   @spec render_tool_result(String.t(), boolean()) :: IO.chardata()

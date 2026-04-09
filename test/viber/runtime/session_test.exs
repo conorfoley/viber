@@ -89,6 +89,20 @@ defmodule Viber.Runtime.SessionTest do
     end
   end
 
+  describe "get_id and set_model" do
+    test "get_id returns the session id" do
+      {:ok, pid} = Session.start_link(id: "id-test")
+      assert "id-test" = Session.get_id(pid)
+    end
+
+    test "set_model updates the model" do
+      {:ok, pid} = Session.start_link(id: "model-test", model: "old-model")
+      :ok = Session.set_model(pid, "new-model")
+      state = :sys.get_state(pid)
+      assert state.model == "new-model"
+    end
+  end
+
   describe "persistence" do
     @tag :tmp_dir
     test "save and load round-trip", %{tmp_dir: tmp_dir} do

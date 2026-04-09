@@ -6,7 +6,7 @@ defmodule Viber.Tools.Builtins.Git do
   @default_timeout 60_000
   @max_output_bytes 100_000
 
-  @read_only_subcommands ~w(status log diff show branch tag stash reflog shortlog describe rev-parse ls-files ls-tree blame)
+  @read_only_subcommands ~w(status log diff show reflog shortlog describe rev-parse ls-files ls-tree blame)
 
   @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(%{"subcommand" => subcommand} = input) do

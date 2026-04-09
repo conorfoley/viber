@@ -15,8 +15,16 @@ defmodule Viber.API.Client do
     "sonnet" => "claude-sonnet-4-6",
     "haiku" => "claude-haiku-4-5-20251213",
     "grok" => "grok-3",
-    "grok-mini" => "grok-3-mini"
+    "grok-mini" => "grok-3-mini",
+    "gpt4o" => "gpt-4o",
+    "gpt41" => "gpt-4.1",
+    "o3" => "o3",
+    "o3-mini" => "o3-mini",
+    "o4-mini" => "o4-mini"
   }
+
+  @spec model_aliases() :: %{String.t() => String.t()}
+  def model_aliases, do: @model_aliases
 
   @spec resolve_model_alias(String.t()) :: String.t()
   def resolve_model_alias(model) do
@@ -38,13 +46,7 @@ defmodule Viber.API.Client do
       String.starts_with?(model, "gpt-") ->
         :openai
 
-      String.starts_with?(model, "o1-") ->
-        :openai
-
-      String.starts_with?(model, "o3-") ->
-        :openai
-
-      String.starts_with?(model, "o4-") ->
+      String.match?(model, ~r/^o\d/) ->
         :openai
 
       env_key_set?("ANTHROPIC_API_KEY") ->

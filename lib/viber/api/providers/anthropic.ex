@@ -54,7 +54,15 @@ defmodule Viber.API.Providers.Anthropic do
              json: MessageRequest.with_streaming(request),
              into: :self
            ) do
-        {:ok, %{status: status, body: async}} when status in 200..299 ->
+        {:ok, %{status: status, headers: headers, body: async}} when status in 200..299 ->
+          content_type = get_header(headers, "content-type")
+
+          if content_type && not String.contains?(content_type, "text/event-stream") do
+            Logger.warning(
+              "Anthropic stream_message: unexpected content-type #{content_type}, expected text/event-stream"
+            )
+          end
+
           Logger.debug("Anthropic stream_message: stream started, status=#{status}")
           {:ok, build_event_stream(async)}
 
@@ -209,4 +217,18 @@ defmodule Viber.API.Providers.Anthropic do
 
   defp retryable_status?(status) when status in [408, 409, 429, 500, 502, 503, 504], do: true
   defp retryable_status?(_), do: false
+
+  defp get_header(headers, name) when is_map(headers) do
+    case Map.get(headers, name) do
+      [value | _] -> value
+      _ -> nil
+    end
+  end
+
+  defp get_header(headers, name) when is_list(headers) do
+    case List.keyfind(headers, name, 0) do
+      {_, value} -> value
+      nil -> nil
+    end
+  end
 end

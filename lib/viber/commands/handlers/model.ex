@@ -17,6 +17,18 @@ defmodule Viber.Commands.Handlers.Model do
     end
   end
 
+  def execute(["list" | _], _context) do
+    aliases = Client.model_aliases()
+
+    lines =
+      aliases
+      |> Enum.sort_by(fn {alias_, _} -> alias_ end)
+      |> Enum.map(fn {alias_, full} -> "  #{alias_} → #{full}" end)
+
+    header = "Available model aliases:"
+    {:ok, Enum.join([header | lines], "\n")}
+  end
+
   def execute([new_model | _], _context) do
     resolved = Client.resolve_model_alias(new_model)
 

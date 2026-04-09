@@ -19,6 +19,6 @@ defmodule Viber.MockProvider do
 
   @impl true
   def stream_message(_request) do
-    {:ok, Stream.map([], & &1)}
+    raise "#{__MODULE__}.stream_message/1 is not implemented — define an inline provider module in your test"
   end
 end

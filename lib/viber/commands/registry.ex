@@ -51,7 +51,7 @@ defmodule Viber.Commands.Registry do
       name: "model",
       aliases: [],
       description: "Show or switch the active model",
-      usage: "/model [model_name]",
+      usage: "/model [list|model_name]",
       category: :config,
       handler: Handlers.Model
     },
@@ -86,6 +86,22 @@ defmodule Viber.Commands.Registry do
       usage: "/attach <path|glob> [...]",
       category: :session,
       handler: Handlers.Attach
+    },
+    %{
+      name: "resume",
+      aliases: ["sessions"],
+      description: "List recent sessions, resume a previous conversation, or purge old sessions",
+      usage: "/resume [id|number|purge [days]]",
+      category: :session,
+      handler: Handlers.Resume
+    },
+    %{
+      name: "reload",
+      aliases: [],
+      description: "Recompile and hot-reload Viber source modules",
+      usage: "/reload",
+      category: :project,
+      handler: Handlers.Reload
     }
   ]
 

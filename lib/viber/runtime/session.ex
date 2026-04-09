@@ -5,7 +5,9 @@ defmodule Viber.Runtime.Session do
 
   use GenServer
 
-  alias Viber.Runtime.Usage
+  require Logger
+
+  alias Viber.Runtime.{SessionStore, Usage}
 
   @type message_role :: :user | :assistant | :system | :tool
   @type content_block ::
@@ -24,7 +26,10 @@ defmodule Viber.Runtime.Session do
           version: pos_integer(),
           messages: [message()],
           cumulative_usage: Usage.t(),
-          storage_path: String.t() | nil
+          storage_path: String.t() | nil,
+          model: String.t() | nil,
+          project_root: String.t() | nil,
+          persist_timer: reference() | nil
         }
 
   @enforce_keys [:id]
@@ -32,15 +37,55 @@ defmodule Viber.Runtime.Session do
             version: 1,
             messages: [],
             cumulative_usage: %Usage{},
-            storage_path: nil
+            storage_path: nil,
+            model: nil,
+            project_root: nil,
+            persist_timer: nil
+
+  @persist_delay_ms 2_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     id = Keyword.get(opts, :id, generate_id())
     storage_path = Keyword.get(opts, :storage_path)
+    model = Keyword.get(opts, :model)
+    project_root = Keyword.get(opts, :project_root)
     name = Keyword.get(opts, :name)
     gen_opts = if name, do: [name: name], else: []
-    GenServer.start_link(__MODULE__, {id, storage_path}, gen_opts)
+    GenServer.start_link(__MODULE__, {id, storage_path, model, project_root}, gen_opts)
+  end
+
+  @spec resume(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  def resume(session_id, opts \\ []) do
+    case SessionStore.load_session(session_id) do
+      {:ok, {messages, usage, meta}} ->
+        name = Keyword.get(opts, :name)
+        gen_opts = if name, do: [name: name], else: []
+
+        GenServer.start_link(
+          __MODULE__,
+          {:resume, session_id, messages, usage, meta},
+          gen_opts
+        )
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @spec get_id(GenServer.server()) :: String.t()
+  def get_id(server) do
+    GenServer.call(server, :get_id)
+  end
+
+  @spec get_project_root(GenServer.server()) :: String.t() | nil
+  def get_project_root(server) do
+    GenServer.call(server, :get_project_root)
+  end
+
+  @spec set_model(GenServer.server(), String.t()) :: :ok
+  def set_model(server, model) do
+    GenServer.call(server, {:set_model, model})
   end
 
   @spec add_message(GenServer.server(), message()) :: :ok
@@ -82,9 +127,43 @@ defmodule Viber.Runtime.Session do
   end
 
   @impl true
-  def init({id, storage_path}) do
-    state = %__MODULE__{id: id, storage_path: storage_path}
+  def init({id, storage_path, model, project_root}) do
+    state = %__MODULE__{
+      id: id,
+      storage_path: storage_path,
+      model: model,
+      project_root: project_root
+    }
+
     {:ok, state}
+  end
+
+  @impl true
+  def init({:resume, id, messages, usage, meta}) do
+    state = %__MODULE__{
+      id: id,
+      messages: messages,
+      cumulative_usage: usage,
+      model: meta[:model],
+      project_root: meta[:project_root]
+    }
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_id, _from, state) do
+    {:reply, state.id, state}
+  end
+
+  @impl true
+  def handle_call(:get_project_root, _from, state) do
+    {:reply, state.project_root, state}
+  end
+
+  @impl true
+  def handle_call({:set_model, model}, _from, state) do
+    {:reply, :ok, %{state | model: model}}
   end
 
   @impl true
@@ -97,7 +176,7 @@ defmodule Viber.Runtime.Session do
       end
 
     state = %{state | messages: [message | state.messages], cumulative_usage: new_usage}
-    {:reply, :ok, state}
+    {:reply, :ok, schedule_persist(state)}
   end
 
   @impl true
@@ -112,13 +191,15 @@ defmodule Viber.Runtime.Session do
 
   @impl true
   def handle_call(:clear, _from, state) do
-    {:reply, :ok, %{state | messages: [], cumulative_usage: %Usage{}}}
+    state = %{state | messages: [], cumulative_usage: %Usage{}}
+    {:reply, :ok, schedule_persist(state)}
   end
 
   @impl true
   def handle_call({:replace_messages, messages}, _from, state) do
     usage = recompute_usage(messages)
-    {:reply, :ok, %{state | messages: messages, cumulative_usage: usage}}
+    state = %{state | messages: Enum.reverse(messages), cumulative_usage: usage}
+    {:reply, :ok, schedule_persist(state)}
   end
 
   @impl true
@@ -136,6 +217,46 @@ defmodule Viber.Runtime.Session do
     end
   end
 
+  @impl true
+  def handle_info(:persist, state) do
+    do_persist(state)
+    {:noreply, %{state | persist_timer: nil}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    do_persist(state)
+    :ok
+  end
+
+  defp schedule_persist(state) do
+    if state.persist_timer, do: Process.cancel_timer(state.persist_timer)
+    timer = Process.send_after(self(), :persist, @persist_delay_ms)
+    %{state | persist_timer: timer}
+  end
+
+  defp do_persist(%{messages: []} = _state), do: :ok
+
+  defp do_persist(state) do
+    messages = Enum.reverse(state.messages)
+
+    case SessionStore.persist(state.id, messages, state.cumulative_usage,
+           model: state.model,
+           project_root: state.project_root
+         ) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to persist session #{state.id}: #{inspect(reason)}")
+    end
+  rescue
+    e ->
+      Logger.warning("Failed to persist session #{state.id}: #{Exception.message(e)}")
+  end
+
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
   end
@@ -150,53 +271,13 @@ defmodule Viber.Runtime.Session do
     %{
       "id" => state.id,
       "version" => state.version,
-      "messages" => state.messages |> Enum.reverse() |> Enum.map(&message_to_json/1)
-    }
-  end
-
-  defp message_to_json(msg) do
-    json = %{
-      "role" => Atom.to_string(msg.role),
-      "blocks" => Enum.map(msg.blocks, &block_to_json/1)
-    }
-
-    if msg[:usage] do
-      Map.put(json, "usage", usage_to_json(msg.usage))
-    else
-      json
-    end
-  end
-
-  defp block_to_json({:text, text}) do
-    %{"type" => "text", "text" => text}
-  end
-
-  defp block_to_json({:tool_use, id, name, input}) do
-    %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
-  end
-
-  defp block_to_json({:tool_result, tool_use_id, tool_name, output, is_error}) do
-    %{
-      "type" => "tool_result",
-      "tool_use_id" => tool_use_id,
-      "tool_name" => tool_name,
-      "output" => output,
-      "is_error" => is_error
-    }
-  end
-
-  defp usage_to_json(%Usage{} = u) do
-    %{
-      "input_tokens" => u.input_tokens,
-      "output_tokens" => u.output_tokens,
-      "cache_creation_tokens" => u.cache_creation_tokens,
-      "cache_read_tokens" => u.cache_read_tokens
+      "messages" => state.messages |> Enum.reverse() |> Enum.map(&SessionStore.encode_message/1)
     }
   end
 
   @spec from_json(map(), String.t() | nil) :: t()
   defp from_json(data, path) do
-    messages = Enum.map(data["messages"] || [], &message_from_json/1)
+    messages = Enum.map(data["messages"] || [], &SessionStore.decode_message/1)
 
     %__MODULE__{
       id: data["id"] || generate_id(),
@@ -204,48 +285,6 @@ defmodule Viber.Runtime.Session do
       messages: messages,
       cumulative_usage: recompute_usage(messages),
       storage_path: path
-    }
-  end
-
-  defp message_from_json(json) do
-    role = role_from_string(json["role"])
-    blocks = Enum.map(json["blocks"] || [], &block_from_json/1)
-    usage = if json["usage"], do: usage_from_json(json["usage"]), else: nil
-
-    %{role: role, blocks: blocks, usage: usage}
-  end
-
-  defp role_from_string("system"), do: :system
-  defp role_from_string("user"), do: :user
-  defp role_from_string("assistant"), do: :assistant
-  defp role_from_string("tool"), do: :tool
-
-  defp block_from_json(%{"type" => "text", "text" => text}) do
-    {:text, text}
-  end
-
-  defp block_from_json(%{"type" => "tool_use", "id" => id, "name" => name, "input" => input}) do
-    {:tool_use, id, name, input}
-  end
-
-  defp block_from_json(%{
-         "type" => "tool_result",
-         "tool_use_id" => tool_use_id,
-         "tool_name" => tool_name,
-         "output" => output,
-         "is_error" => is_error
-       }) do
-    {:tool_result, tool_use_id, tool_name, output, is_error}
-  end
-
-  defp usage_from_json(json) do
-    %Usage{
-      input_tokens: json["input_tokens"] || 0,
-      output_tokens: json["output_tokens"] || 0,
-      cache_creation_tokens:
-        json["cache_creation_tokens"] || json["cache_creation_input_tokens"] || 0,
-      cache_read_tokens: json["cache_read_tokens"] || json["cache_read_input_tokens"] || 0,
-      turns: 1
     }
   end
 

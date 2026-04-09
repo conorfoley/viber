@@ -35,7 +35,11 @@ defmodule Viber.MixProject do
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       {:owl, "~> 0.12"},
-      {:dialyxir, "~> 1.4", only: :dev, runtime: false}
+      {:ecto_sql, "~> 3.12"},
+      {:postgrex, "~> 0.19"},
+      {:file_system, "~> 1.0"},
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 end

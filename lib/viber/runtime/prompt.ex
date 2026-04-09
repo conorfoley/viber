@@ -6,6 +6,13 @@ defmodule Viber.Runtime.Prompt do
   alias Viber.Runtime.{Bootstrap, Permissions}
   alias Viber.Tools.Registry
 
+  @chars_per_token 4
+
+  @spec estimate_tokens(String.t()) :: non_neg_integer()
+  def estimate_tokens(prompt) do
+    div(String.length(prompt), @chars_per_token)
+  end
+
   @spec build(keyword()) :: String.t()
   def build(opts \\ []) do
     project_root = Keyword.get(opts, :project_root, File.cwd!())
@@ -97,6 +104,7 @@ defmodule Viber.Runtime.Prompt do
     candidates = [
       Path.join(project_root, "VIBER.md"),
       Path.join(project_root, "CLAUDE.md"),
+      Path.join(project_root, "AGENTS.md"),
       Path.join([project_root, ".viber", "VIBER.md"]),
       Path.join([project_root, ".viber", "instructions.md"])
     ]

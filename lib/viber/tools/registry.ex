@@ -142,7 +142,8 @@ defmodule Viber.Tools.Registry do
         "required" => ["url"],
         "additionalProperties" => false
       },
-      permission: :read_only,
+      permission: :workspace_write,
+      permission_fn: &Builtins.WebFetch.permission_for/1,
       handler: &Builtins.WebFetch.execute/1
     },
     "multi_edit" => %Spec{
@@ -346,6 +347,31 @@ defmodule Viber.Tools.Registry do
       },
       permission: :workspace_write,
       handler: &Builtins.Formatter.execute/1
+    },
+    "ecto_schema_inspector" => %Spec{
+      name: "ecto_schema_inspector",
+      description:
+        "Parse an Ecto schema module and return its fields, types, associations, embeds, " <>
+          "and changeset functions as structured output — without executing any SQL. " <>
+          "Provide 'module' to inspect a specific module by name, 'path' to scan a file or directory, " <>
+          "or omit both to scan the entire project.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "module" => %{
+            "type" => "string",
+            "description" => "Fully-qualified module name, e.g. \"MyApp.Accounts.User\""
+          },
+          "path" => %{
+            "type" => "string",
+            "description" => "File or directory path to scope the search"
+          }
+        },
+        "required" => [],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.EctoSchemaInspector.execute/1
     }
   }
 

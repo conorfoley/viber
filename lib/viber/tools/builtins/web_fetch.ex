@@ -5,6 +5,26 @@ defmodule Viber.Tools.Builtins.WebFetch do
 
   @max_content_bytes 100_000
 
+  @known_safe_hosts ~w(
+    docs.python.org hexdocs.pm elixir-lang.org
+    developer.mozilla.org stackoverflow.com
+    github.com raw.githubusercontent.com
+    en.wikipedia.org
+  )
+
+  @spec permission_for(map()) :: :read_only | :workspace_write
+  def permission_for(%{"url" => url}) do
+    uri = URI.parse(url)
+
+    if uri.host in @known_safe_hosts do
+      :read_only
+    else
+      :workspace_write
+    end
+  end
+
+  def permission_for(_), do: :workspace_write
+
   @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(%{"url" => url}) do
     uri = URI.parse(url)

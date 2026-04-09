@@ -9,6 +9,26 @@ defmodule Viber.API.SSEParser do
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
+  @spec next_frame(binary()) :: {binary(), binary()} | nil
+  def next_frame(buf) do
+    cond do
+      (pos = :binary.match(buf, "\n\n")) != :nomatch ->
+        {start, _len} = pos
+        frame = binary_part(buf, 0, start)
+        rest = binary_part(buf, start + 2, byte_size(buf) - start - 2)
+        {frame, rest}
+
+      (pos = :binary.match(buf, "\r\n\r\n")) != :nomatch ->
+        {start, _len} = pos
+        frame = binary_part(buf, 0, start)
+        rest = binary_part(buf, start + 4, byte_size(buf) - start - 4)
+        {frame, rest}
+
+      true ->
+        nil
+    end
+  end
+
   @spec push(t(), binary()) :: {:ok, t(), [Viber.API.Types.stream_event()]} | {:error, term()}
   def push(%__MODULE__{buffer: buf} = _parser, chunk) when is_binary(chunk) do
     buf = buf <> chunk
@@ -39,25 +59,6 @@ defmodule Viber.API.SSEParser do
 
       nil ->
         {:ok, parser, Enum.reverse(acc)}
-    end
-  end
-
-  defp next_frame(buf) do
-    cond do
-      (pos = :binary.match(buf, "\n\n")) != :nomatch ->
-        {start, _len} = pos
-        frame = binary_part(buf, 0, start)
-        rest = binary_part(buf, start + 2, byte_size(buf) - start - 2)
-        {frame, rest}
-
-      (pos = :binary.match(buf, "\r\n\r\n")) != :nomatch ->
-        {start, _len} = pos
-        frame = binary_part(buf, 0, start)
-        rest = binary_part(buf, start + 4, byte_size(buf) - start - 4)
-        {frame, rest}
-
-      true ->
-        nil
     end
   end
 

@@ -77,14 +77,22 @@ defmodule Viber.CLI.Repl do
               {:ok, output} ->
                 IO.puts(output)
 
+                if name == "model" and args != [] do
+                  new_model = List.first(args)
+                  Viber.Runtime.Session.set_model(state.session, new_model)
+                  %{state | model: new_model}
+                else
+                  state
+                end
+
               {:error, error} ->
                 IO.write(Renderer.render_error(error))
-            end
+                state
 
-            if name == "model" and args != [] do
-              %{state | model: List.first(args)}
-            else
-              state
+              {:resume, new_session} ->
+                msg_count = length(Viber.Runtime.Session.get_messages(new_session))
+                IO.puts("Resumed session (#{msg_count} messages). Continue where you left off.")
+                %{state | session: new_session}
             end
 
           :error ->

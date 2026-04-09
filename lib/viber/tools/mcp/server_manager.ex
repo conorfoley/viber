@@ -15,7 +15,16 @@ defmodule Viber.Tools.MCP.ServerManager do
 
   @impl true
   def init(_opts) do
+    Process.flag(:trap_exit, true)
     DynamicSupervisor.init(strategy: :one_for_one)
+  end
+
+  def terminate(_reason, _state) do
+    for {name, _pid} <- list_servers() do
+      stop_server(name)
+    end
+
+    :ok
   end
 
   @spec start_servers(Viber.Runtime.Config.t()) :: {:ok, non_neg_integer()}

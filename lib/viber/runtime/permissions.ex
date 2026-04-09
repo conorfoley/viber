@@ -56,7 +56,23 @@ defmodule Viber.Runtime.Permissions do
 
   @spec prompt_user(String.t(), String.t()) :: boolean()
   def prompt_user(tool_name, tool_input) do
-    truncated = String.slice(tool_input, 0, 300)
+    width =
+      case :io.columns() do
+        {:ok, cols} -> cols
+        _ -> 80
+      end
+
+    max_content_width = max(width - 6, 20)
+
+    truncated =
+      tool_input
+      |> String.slice(0, 500)
+      |> String.split("\n")
+      |> Enum.flat_map(fn line ->
+        line
+        |> chunk_string(max_content_width)
+      end)
+      |> Enum.join("\n")
 
     content =
       [
@@ -76,7 +92,7 @@ defmodule Viber.Runtime.Permissions do
       )
       |> Owl.Data.to_chardata()
 
-    IO.write(box)
+    IO.write(["\n", box])
     IO.puts("")
 
     answer =
@@ -116,4 +132,13 @@ defmodule Viber.Runtime.Permissions do
   def mode_rank(:danger_full_access), do: 2
   def mode_rank(:prompt), do: -1
   def mode_rank(:allow), do: 3
+
+  defp chunk_string("", _width), do: [""]
+
+  defp chunk_string(str, width) do
+    str
+    |> String.graphemes()
+    |> Enum.chunk_every(width)
+    |> Enum.map(&Enum.join/1)
+  end
 end

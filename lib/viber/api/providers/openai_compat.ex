@@ -5,7 +5,8 @@ defmodule Viber.API.Providers.OpenAICompat do
 
   @behaviour Viber.API.Provider
 
-  alias Viber.API.{Error, MessageRequest, Usage}
+  alias Viber.API.{Error, MessageRequest, SSEParser, Usage}
+  alias Viber.API.Providers.OpenAIStreamState
 
   defstruct [:provider_name, :api_key_env, :base_url_env, :default_base_url]
 
@@ -106,18 +107,34 @@ defmodule Viber.API.Providers.OpenAICompat do
       if request.system && request.system != "" do
         [
           %{role: "system", content: request.system}
-          | Enum.flat_map(request.messages, &translate_message/1)
+          | Enum.map(request.messages, &translate_message/1)
         ]
       else
-        Enum.flat_map(request.messages, &translate_message/1)
+        Enum.map(request.messages, &translate_message/1)
       end
+
+    token_limit_key =
+      if reasoning_model?(request.model), do: :max_completion_tokens, else: :max_tokens
 
     payload = %{
       model: request.model,
-      max_tokens: request.max_tokens,
       messages: messages,
       stream: request.stream
     }
+
+    payload =
+      if request.max_tokens do
+        Map.put(payload, token_limit_key, request.max_tokens)
+      else
+        payload
+      end
+
+    payload =
+      if request.stream do
+        Map.put(payload, :stream_options, %{include_usage: true})
+      else
+        payload
+      end
 
     payload =
       if request.tools do
@@ -221,27 +238,39 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp translate_message(%Viber.API.InputMessage{content: content}) do
-    Enum.flat_map(content, fn
-      %{type: "text", text: text} ->
-        [%{role: "user", content: text}]
+    tool_results =
+      Enum.flat_map(content, fn
+        %{type: "tool_result", tool_use_id: tool_use_id, content: tc_content} = block ->
+          text =
+            tc_content
+            |> Enum.map(fn
+              %{type: "text", text: t} -> t
+              %{type: "json", value: v} -> Jason.encode!(v)
+              _ -> ""
+            end)
+            |> Enum.join("\n")
 
-      %{type: "tool_result", tool_use_id: tool_use_id, content: tc_content} = block ->
-        text =
-          tc_content
-          |> Enum.map(fn
-            %{type: "text", text: t} -> t
-            %{type: "json", value: v} -> Jason.encode!(v)
-            _ -> ""
-          end)
-          |> Enum.join("\n")
+          msg = %{role: "tool", tool_call_id: tool_use_id, content: text}
+          msg = if Map.get(block, :is_error, false), do: Map.put(msg, :is_error, true), else: msg
+          [msg]
 
-        msg = %{role: "tool", tool_call_id: tool_use_id, content: text}
-        msg = if Map.get(block, :is_error, false), do: Map.put(msg, :is_error, true), else: msg
-        [msg]
+        _ ->
+          []
+      end)
 
-      _ ->
-        []
-    end)
+    if tool_results != [] do
+      tool_results
+    else
+      text =
+        content
+        |> Enum.flat_map(fn
+          %{type: "text", text: t} -> [t]
+          _ -> []
+        end)
+        |> Enum.join("\n")
+
+      [%{role: "user", content: text}]
+    end
   end
 
   defp openai_tool_definition(%Viber.API.ToolDefinition{} = td) do
@@ -266,6 +295,13 @@ defmodule Viber.API.Providers.OpenAICompat do
   defp non_empty(""), do: nil
   defp non_empty(nil), do: nil
   defp non_empty(s), do: s
+
+  @reasoning_model_prefixes ["o1", "o3", "o4"]
+
+  @spec reasoning_model?(String.t()) :: boolean()
+  def reasoning_model?(model) do
+    Enum.any?(@reasoning_model_prefixes, &String.starts_with?(model, &1))
+  end
 
   defp config_for_model(model) do
     cond do
@@ -305,9 +341,42 @@ defmodule Viber.API.Providers.OpenAICompat do
     end
   end
 
-  defp build_event_stream(ref, model) do
+  defp build_event_stream(%Req.Response.Async{} = async, model) do
     Stream.resource(
-      fn -> {ref, "", stream_state_new(model)} end,
+      fn -> {async, "", OpenAIStreamState.new(model)} end,
+      fn
+        :done ->
+          {:halt, :done}
+
+        {async, buffer, state} ->
+          ref = async.ref
+
+          receive do
+            {^ref, _} = message ->
+              case async.stream_fun.(ref, message) do
+                {:ok, [data: chunk]} ->
+                  {events, new_buffer, new_state} = process_openai_chunk(buffer <> chunk, state)
+                  {events, {async, new_buffer, new_state}}
+
+                {:ok, [:done]} ->
+                  events = OpenAIStreamState.finish(state)
+                  {events, :done}
+
+                {:ok, [trailers: _]} ->
+                  {[], {async, buffer, state}}
+
+                {:error, e} ->
+                  {[{:stream_error, e}], :done}
+              end
+          end
+      end,
+      fn _ -> :ok end
+    )
+  end
+
+  defp build_event_stream(ref, model) when is_reference(ref) do
+    Stream.resource(
+      fn -> {ref, "", OpenAIStreamState.new(model)} end,
       fn
         :done ->
           {:halt, :done}
@@ -319,7 +388,7 @@ defmodule Viber.API.Providers.OpenAICompat do
               {events, {ref, new_buffer, new_state}}
 
             {^ref, :done} ->
-              events = stream_state_finish(state)
+              events = OpenAIStreamState.finish(state)
               {events, :done}
           end
       end,
@@ -333,39 +402,19 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp process_openai_frames(buffer, state, rev_acc) do
-    case next_sse_frame(buffer) do
+    case SSEParser.next_frame(buffer) do
       {frame, rest} ->
         case parse_openai_frame(frame) do
           {:ok, nil} ->
             process_openai_frames(rest, state, rev_acc)
 
           {:ok, chunk} ->
-            {events, new_state} = stream_state_ingest(state, chunk)
+            {events, new_state} = OpenAIStreamState.ingest(state, chunk)
             process_openai_frames(rest, new_state, Enum.reverse(events) ++ rev_acc)
         end
 
       nil ->
         {rev_acc, buffer, state}
-    end
-  end
-
-  defp next_sse_frame(buffer) do
-    case :binary.match(buffer, "\n\n") do
-      {pos, _} ->
-        frame = binary_part(buffer, 0, pos)
-        rest = binary_part(buffer, pos + 2, byte_size(buffer) - pos - 2)
-        {frame, rest}
-
-      :nomatch ->
-        case :binary.match(buffer, "\r\n\r\n") do
-          {pos, _} ->
-            frame = binary_part(buffer, 0, pos)
-            rest = binary_part(buffer, pos + 4, byte_size(buffer) - pos - 4)
-            {frame, rest}
-
-          :nomatch ->
-            nil
-        end
     end
   end
 
@@ -408,223 +457,43 @@ defmodule Viber.API.Providers.OpenAICompat do
     end
   end
 
-  defmodule StreamState do
-    @moduledoc false
-
-    defstruct model: nil,
-              message_started: false,
-              text_started: false,
-              text_finished: false,
-              finished: false,
-              stop_reason: nil,
-              usage: nil,
-              tool_calls: %{}
-  end
-
-  defp stream_state_new(model) do
-    %StreamState{model: model}
-  end
-
   @spec stream_events_from_chunks(String.t(), [map()]) :: [term()]
   def stream_events_from_chunks(model, chunks) do
-    {events, state} =
-      Enum.reduce(chunks, {[], stream_state_new(model)}, fn chunk, {acc, st} ->
-        {new_events, new_state} = stream_state_ingest(st, chunk)
-        {acc ++ new_events, new_state}
-      end)
-
-    events ++ stream_state_finish(state)
+    OpenAIStreamState.events_from_chunks(model, chunks)
   end
 
-  defp stream_state_ingest(%StreamState{} = state, chunk) do
-    rev_events = []
-
-    {rev_events, state} =
-      if not state.message_started do
-        event =
-          {:message_start,
-           %Viber.API.MessageResponse{
-             id: chunk["id"],
-             type: "message",
-             role: "assistant",
-             content: [],
-             model: (chunk["model"] || state.model) |> non_empty() || state.model,
-             usage: %Usage{input_tokens: 0, output_tokens: 0}
-           }}
-
-        {[event | rev_events], %{state | message_started: true}}
-      else
-        {rev_events, state}
-      end
-
-    state =
-      case chunk["usage"] do
-        %{"prompt_tokens" => pt, "completion_tokens" => ct} ->
-          %{state | usage: %Usage{input_tokens: pt, output_tokens: ct}}
-
-        _ ->
-          state
-      end
-
-    choices = chunk["choices"] || []
-
-    {rev_events, state} =
-      Enum.reduce(choices, {rev_events, state}, fn choice, {evts, st} ->
-        delta = choice["delta"] || %{}
-
-        {evts, st} =
-          case delta["content"] do
-            nil ->
-              {evts, st}
-
-            "" ->
-              {evts, st}
-
-            text ->
-              if not st.text_started do
-                delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
-                start_event = {:content_block_start, 0, %{type: "text", text: ""}}
-                {[delta_event, start_event | evts], %{st | text_started: true}}
-              else
-                delta_event = {:content_block_delta, 0, %{type: "text_delta", text: text}}
-                {[delta_event | evts], st}
-              end
-          end
-
-        tool_calls = delta["tool_calls"] || []
-
-        {evts, st} =
-          Enum.reduce(tool_calls, {evts, st}, fn tc, {e, s} ->
-            idx = tc["index"] || 0
-
-            existing =
-              Map.get(s.tool_calls, idx, %{
-                id: nil,
-                name: nil,
-                arguments: "",
-                started: false,
-                stopped: false
-              })
-
-            argument_delta = get_in(tc, ["function", "arguments"])
-
-            existing =
-              existing
-              |> then(fn ex -> if tc["id"], do: %{ex | id: tc["id"]}, else: ex end)
-              |> then(fn ex ->
-                case get_in(tc, ["function", "name"]) do
-                  nil -> ex
-                  name -> %{ex | name: name}
-                end
-              end)
-              |> then(fn ex ->
-                case argument_delta do
-                  nil -> ex
-                  args -> %{ex | arguments: ex.arguments <> args}
-                end
-              end)
-
-            block_index = idx + 1
-
-            {e, existing} =
-              if not existing.started and existing.name do
-                start =
-                  {:content_block_start, block_index,
-                   %{
-                     type: "tool_use",
-                     id: existing.id || "tool_call_#{idx}",
-                     name: existing.name,
-                     input: %{}
-                   }}
-
-                {[start | e], %{existing | started: true}}
-              else
-                {e, existing}
-              end
-
-            e =
-              if existing.started and is_binary(argument_delta) and argument_delta != "" do
-                delta_event =
-                  {:content_block_delta, block_index,
-                   %{type: "input_json_delta", partial_json: argument_delta}}
-
-                [delta_event | e]
-              else
-                e
-              end
-
-            s = %{s | tool_calls: Map.put(s.tool_calls, idx, existing)}
-            {e, s}
-          end)
-
-        st =
-          case choice["finish_reason"] do
-            nil -> st
-            reason -> %{st | stop_reason: normalize_finish_reason(reason)}
-          end
-
-        {evts, st}
-      end)
-
-    {Enum.reverse(rev_events), state}
-  end
-
-  defp stream_state_finish(%StreamState{} = state) do
-    if state.finished or not state.message_started do
-      []
-    else
-      rev_events = []
-
-      rev_events =
-        if state.text_started and not state.text_finished do
-          [{:content_block_stop, 0} | rev_events]
-        else
-          rev_events
-        end
-
-      rev_events =
-        Enum.reduce(state.tool_calls, rev_events, fn {idx, tc}, evts ->
-          block_index = idx + 1
-
-          evts =
-            if not tc.started and tc.name do
-              start =
-                {:content_block_start, block_index,
-                 %{type: "tool_use", id: tc.id || "tool_call_#{idx}", name: tc.name, input: %{}}}
-
-              [start | evts]
-            else
-              evts
-            end
-
-          if (tc.started or tc.name) and not tc.stopped do
-            [{:content_block_stop, block_index} | evts]
-          else
-            evts
-          end
-        end)
-
-      usage = state.usage || %Usage{input_tokens: 0, output_tokens: 0}
-
-      Enum.reverse(rev_events) ++
-        [
-          {:message_delta,
-           %{"stop_reason" => state.stop_reason || "end_turn", "stop_sequence" => nil}, usage},
-          :message_stop
-        ]
-    end
+  defp collect_async_body(%Req.Response.Async{} = async) do
+    do_collect_req_async_body(async, [])
   end
 
   defp collect_async_body(ref) when is_reference(ref) do
     do_collect_async_body(ref, [])
   end
 
-  defp collect_async_body(body), do: body
+  defp collect_async_body(body) when is_binary(body), do: body
+
+  defp collect_async_body(body), do: inspect(body)
 
   defp do_collect_async_body(ref, acc) do
     receive do
       {^ref, {:data, data}} -> do_collect_async_body(ref, [data | acc])
       {^ref, :done} -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+    after
+      5_000 -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+    end
+  end
+
+  defp do_collect_req_async_body(%Req.Response.Async{} = async, acc) do
+    ref = async.ref
+
+    receive do
+      {^ref, _} = message ->
+        case async.stream_fun.(ref, message) do
+          {:ok, [data: chunk]} -> do_collect_req_async_body(async, [chunk | acc])
+          {:ok, [:done]} -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+          {:ok, [trailers: _]} -> do_collect_req_async_body(async, acc)
+          {:error, _} -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+        end
     after
       5_000 -> acc |> Enum.reverse() |> IO.iodata_to_binary()
     end

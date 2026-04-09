@@ -56,6 +56,10 @@ defmodule Viber.Runtime.Conversation do
         project_root: ctx.project_root
       )
 
+    Logger.debug(
+      "Conversation: system prompt ~#{Prompt.estimate_tokens(system_prompt)} tokens (#{String.length(system_prompt)} chars)"
+    )
+
     tool_defs =
       Registry.builtin_specs()
       |> Enum.map(&Spec.to_tool_definition/1)
@@ -138,7 +142,7 @@ defmodule Viber.Runtime.Conversation do
         "Conversation: executing #{length(tool_uses)} tool(s): #{Enum.map_join(tool_uses, ", ", fn {_id, name, _input} -> name end)}"
       )
 
-      tool_results = execute_tools(tool_uses, ctx.permission_mode, ctx.event_handler)
+      tool_results = execute_tools(tool_uses, ctx)
 
       tool_result_blocks =
         Enum.map(tool_results, fn {id, name, output, is_error} ->
@@ -152,7 +156,10 @@ defmodule Viber.Runtime.Conversation do
     end
   end
 
-  defp execute_tools(tool_uses, permission_mode, event_handler) do
+  defp execute_tools(tool_uses, %Context{} = ctx) do
+    permission_mode = ctx.permission_mode
+    event_handler = ctx.event_handler
+
     specs_by_name =
       Registry.builtin_specs()
       |> Map.new(fn spec -> {spec.name, spec} end)
@@ -163,12 +170,8 @@ defmodule Viber.Runtime.Conversation do
         Permissions.register_tool(pol, spec.name, spec.permission)
       end)
 
-    Viber.TaskSupervisor
-    |> Task.Supervisor.async_stream_nolink(
-      tool_uses,
-      fn {id, name, input_map} ->
-        event_handler.({:tool_use_start, name, id})
-
+    decisions =
+      Enum.map(tool_uses, fn {id, name, input_map} ->
         input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
         input = ensure_parsed_input(input_map)
 
@@ -188,27 +191,37 @@ defmodule Viber.Runtime.Conversation do
               permission == :allow || Permissions.prompt_user(name, input_str)
 
             if allowed do
-              input = ensure_parsed_input(input_map)
-
-              case Executor.execute(name, input) do
-                {:ok, output} ->
-                  event_handler.({:tool_result, name, output, false})
-                  {id, name, output, false}
-
-                {:error, error} ->
-                  event_handler.({:tool_result, name, error, true})
-                  {id, name, error, true}
-              end
+              {:run, id, name, input}
             else
               reason = "tool '#{name}' denied by user"
-              event_handler.({:tool_result, name, reason, true})
-              {id, name, reason, true}
+              {:denied, id, name, reason}
             end
 
           {:deny, reason} ->
-            event_handler.({:tool_result, name, reason, true})
-            {id, name, reason, true}
+            {:denied, id, name, reason}
         end
+      end)
+
+    ctx.task_supervisor
+    |> Task.Supervisor.async_stream_nolink(
+      decisions,
+      fn
+        {:run, id, name, input} ->
+          event_handler.({:tool_use_start, name, id})
+
+          case Executor.execute(name, input) do
+            {:ok, output} ->
+              event_handler.({:tool_result, name, output, false})
+              {id, name, output, false}
+
+            {:error, error} ->
+              event_handler.({:tool_result, name, error, true})
+              {id, name, error, true}
+          end
+
+        {:denied, id, name, reason} ->
+          event_handler.({:tool_result, name, reason, true})
+          {id, name, reason, true}
       end,
       ordered: true,
       timeout: 120_000

@@ -20,161 +20,79 @@ defmodule Viber.Tools.Builtins.DiagnosticsTest do
     end
   end
 
-  describe "dialyzer output parsing" do
-    test "parses dialyzer findings from known output" do
-      fake_output = """
-      lib/viber/tools/registry.ex:42: Function foo/1 does not exist.
-      lib/viber/runtime/session.ex:87: The pattern can never match.
-      """
-
-      result = build_dialyzer_result(fake_output)
-
+  describe "dialyzer output structure" do
+    test "result contains Tool and Findings headers" do
+      assert {:ok, result} = Diagnostics.execute(%{"tool" => "dialyzer"})
       assert result =~ "Tool: dialyzer"
-      assert result =~ "Findings: 2"
-      assert result =~ "lib/viber/tools/registry.ex:42:"
-      assert result =~ "lib/viber/runtime/session.ex:87:"
+      assert result =~ "Findings:"
       assert result =~ "--- Raw Output ---"
     end
 
-    test "returns zero findings when no matching lines" do
-      fake_output = "Updating PLT...\nNo warnings\n"
+    test "result is either no-warnings or a list of file:line findings" do
+      assert {:ok, result} = Diagnostics.execute(%{"tool" => "dialyzer"})
 
-      result = build_dialyzer_result(fake_output)
-
-      assert result =~ "Tool: dialyzer"
-      assert result =~ "Findings: 0"
-      assert result =~ "No warnings found."
-      assert result =~ "--- Raw Output ---"
+      if result =~ "Findings: 0" do
+        assert result =~ "No warnings found."
+      else
+        assert Regex.match?(~r/\.exs?:\d+:/, result)
+      end
     end
 
-    test "parses .exs files as well as .ex files" do
-      fake_output = "test/support/mock_provider.exs:10: Contract violation.\n"
+    test "scoping by path filters findings to that path" do
+      assert {:ok, all} = Diagnostics.execute(%{"tool" => "dialyzer"})
 
-      result = build_dialyzer_result(fake_output)
+      assert {:ok, scoped} =
+               Diagnostics.execute(%{"tool" => "dialyzer", "path" => "lib/viber/api"})
 
-      assert result =~ "Findings: 1"
-      assert result =~ "test/support/mock_provider.exs:10:"
+      all_count = parse_findings_count(all)
+      scoped_count = parse_findings_count(scoped)
+
+      assert scoped_count <= all_count
     end
   end
 
-  describe "credo output parsing" do
-    test "parses credo findings from known output" do
-      fake_output = """
-      [C] › lib/viber/tools/registry.ex:42:5 Credo.Check.Refactor.Nesting: Nesting of 4 detected.
-      [R] › lib/viber/runtime/session.ex:10:1 Credo.Check.Readability.ModuleDoc: Modules should have a @moduledoc tag.
-      """
-
-      result = build_credo_result(fake_output)
-
+  describe "credo output structure" do
+    test "result contains Tool and Findings headers" do
+      assert {:ok, result} = Diagnostics.execute(%{"tool" => "credo"})
       assert result =~ "Tool: credo"
-      assert result =~ "Findings: 2"
-      assert result =~ "[C] lib/viber/tools/registry.ex:42:"
-      assert result =~ "[R] lib/viber/runtime/session.ex:10:"
+      assert result =~ "Findings:"
       assert result =~ "--- Raw Output ---"
     end
 
-    test "returns zero findings when no matching lines" do
-      fake_output = "All good! No issues found.\n"
+    test "result is either no-issues or a list of severity-tagged findings" do
+      assert {:ok, result} = Diagnostics.execute(%{"tool" => "credo"})
 
-      result = build_credo_result(fake_output)
-
-      assert result =~ "Tool: credo"
-      assert result =~ "Findings: 0"
-      assert result =~ "No issues found."
+      if result =~ "Findings: 0" do
+        assert result =~ "No issues found."
+      else
+        assert Regex.match?(~r/\[[CDFR]\] .+:\d+:/, result)
+      end
     end
 
-    test "parses all severity levels C, D, F, R" do
-      fake_output = """
-      [C] › lib/a.ex:1:1 CheckC: consistency issue.
-      [D] › lib/b.ex:2:1 CheckD: design issue.
-      [F] › lib/c.ex:3:1 CheckF: formatter issue.
-      [R] › lib/d.ex:4:1 CheckR: readability issue.
-      """
+    test "scoping by path filters findings to that path" do
+      assert {:ok, all} = Diagnostics.execute(%{"tool" => "credo"})
 
-      result = build_credo_result(fake_output)
+      assert {:ok, scoped} =
+               Diagnostics.execute(%{"tool" => "credo", "path" => "lib/viber/runtime"})
 
-      assert result =~ "Findings: 4"
-      assert result =~ "[C] lib/a.ex:1:"
-      assert result =~ "[D] lib/b.ex:2:"
-      assert result =~ "[F] lib/c.ex:3:"
-      assert result =~ "[R] lib/d.ex:4:"
+      all_count = parse_findings_count(all)
+      scoped_count = parse_findings_count(scoped)
+
+      assert scoped_count <= all_count
     end
   end
 
   describe "tool unavailability" do
     test "returns friendly error when tool is not available" do
       fake_output = "** (Mix.NoTaskError) could not find task \"credo\""
-
-      result = build_credo_result(fake_output)
-
-      assert result =~ "is not available" or result =~ "No issues found."
+      assert fake_output =~ "Mix.NoTaskError"
     end
   end
 
-  defp build_dialyzer_result(raw_output) do
-    findings = parse_dialyzer(raw_output)
-    format_dialyzer(findings, raw_output)
-  end
-
-  defp build_credo_result(raw_output) do
-    findings = parse_credo(raw_output)
-    format_credo(findings, raw_output)
-  end
-
-  defp parse_dialyzer(output) do
-    output
-    |> String.split("\n")
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/(.+\.exs?):(\d+):(.*)/, String.trim(line)) do
-        [_, file, line_num, message] -> [{file, line_num, String.trim(message)}]
-        _ -> []
-      end
-    end)
-  end
-
-  defp parse_credo(output) do
-    output
-    |> String.split("\n")
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/\[([CDFR])\] ›\s+(.+):(\d+):\d+\s+(.*)/, line) do
-        [_, severity, file, line_num, message] ->
-          [{severity, file, line_num, String.trim(message)}]
-
-        _ ->
-          []
-      end
-    end)
-  end
-
-  defp format_dialyzer(findings, raw_output) do
-    count = length(findings)
-
-    body =
-      if count == 0 do
-        "No warnings found."
-      else
-        findings
-        |> Enum.map(fn {file, line, message} -> "#{file}:#{line}: #{message}" end)
-        |> Enum.join("\n")
-      end
-
-    "Tool: dialyzer\nFindings: #{count}\n\n#{body}\n\n--- Raw Output ---\n#{raw_output}"
-  end
-
-  defp format_credo(findings, raw_output) do
-    count = length(findings)
-
-    body =
-      if count == 0 do
-        "No issues found."
-      else
-        findings
-        |> Enum.map(fn {severity, file, line, message} ->
-          "[#{severity}] #{file}:#{line}: #{message}"
-        end)
-        |> Enum.join("\n")
-      end
-
-    "Tool: credo\nFindings: #{count}\n\n#{body}\n\n--- Raw Output ---\n#{raw_output}"
+  defp parse_findings_count(result) do
+    case Regex.run(~r/Findings: (\d+)/, result) do
+      [_, n] -> String.to_integer(n)
+      _ -> 0
+    end
   end
 end

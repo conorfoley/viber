@@ -123,6 +123,7 @@ defmodule Viber.Runtime.ConversationTest do
   end
 
   test "tool use triggers execution and follow-up turn" do
+    Process.put(:turn_count, 0)
     {:ok, session} = Session.start_link(id: "conv-2")
 
     result =
