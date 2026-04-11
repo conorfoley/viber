@@ -45,17 +45,22 @@ defmodule Viber.HotReloader do
     project_root = Keyword.fetch!(opts, :project_root)
     watch_dir = Path.join(project_root, "lib")
 
-    {:ok, watcher_pid} = FileSystem.start_link(dirs: [watch_dir])
-    FileSystem.subscribe(watcher_pid)
+    case FileSystem.start_link(dirs: [watch_dir]) do
+      {:ok, watcher_pid} ->
+        FileSystem.subscribe(watcher_pid)
 
-    state = %{
-      watcher_pid: watcher_pid,
-      project_root: project_root,
-      debounce_timer: nil,
-      pending_paths: MapSet.new()
-    }
+        state = %{
+          watcher_pid: watcher_pid,
+          project_root: project_root,
+          debounce_timer: nil,
+          pending_paths: MapSet.new()
+        }
 
-    {:ok, state}
+        {:ok, state}
+
+      _ ->
+        :ignore
+    end
   end
 
   @impl true
