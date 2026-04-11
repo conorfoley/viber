@@ -372,6 +372,190 @@ defmodule Viber.Tools.Registry do
       },
       permission: :read_only,
       handler: &Builtins.EctoSchemaInspector.execute/1
+    },
+    "mysql_query" => %Spec{
+      name: "mysql_query",
+      description:
+        "Execute a SQL query against the active database connection (MySQL or PostgreSQL). " <>
+          "Returns results as a formatted table, JSON, or CSV. " <>
+          "Auto-appends LIMIT to unbounded SELECTs. Blocks UPDATE/DELETE without WHERE.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "SQL query to execute"},
+          "database" => %{
+            "type" => "string",
+            "description" => "Named connection to use (defaults to active connection)"
+          },
+          "format" => %{
+            "type" => "string",
+            "enum" => ["table", "json", "csv"],
+            "description" => "Output format (default: table)"
+          },
+          "limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Row limit for SELECT queries (default: 100)"
+          },
+          "timeout" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Timeout in seconds"
+          },
+          "force" => %{
+            "type" => "boolean",
+            "description" => "Override WHERE-clause safety check for UPDATE/DELETE"
+          }
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      permission: :danger_full_access,
+      permission_fn: &Builtins.MysqlQuery.permission_for/1,
+      handler: &Builtins.MysqlQuery.execute/1
+    },
+    "mysql_schema" => %Spec{
+      name: "mysql_schema",
+      description:
+        "Introspect database schema: list databases, tables, describe columns/indexes, " <>
+          "show CREATE TABLE, explore foreign key relationships, and search columns by pattern.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "list_databases",
+              "list_tables",
+              "describe_table",
+              "show_create",
+              "relationships",
+              "search_columns"
+            ]
+          },
+          "table" => %{
+            "type" => "string",
+            "description" => "Table name (for describe_table, show_create, relationships)"
+          },
+          "filter" => %{"type" => "string", "description" => "Filter pattern (for list_tables)"},
+          "pattern" => %{
+            "type" => "string",
+            "description" => "Search pattern (for search_columns)"
+          },
+          "database" => %{"type" => "string", "description" => "Named connection to use"}
+        },
+        "required" => ["action"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.MysqlSchema.execute/1
+    },
+    "mysql_explain" => %Spec{
+      name: "mysql_explain",
+      description:
+        "Run EXPLAIN or EXPLAIN ANALYZE on a SQL query to show the execution plan. " <>
+          "Useful for understanding query performance and identifying optimization opportunities.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "SQL query to explain"},
+          "analyze" => %{
+            "type" => "boolean",
+            "description" => "Use EXPLAIN ANALYZE for actual execution stats (default: true)"
+          },
+          "database" => %{"type" => "string", "description" => "Named connection to use"}
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.MysqlExplain.execute/1
+    },
+    "data_export" => %Spec{
+      name: "data_export",
+      description:
+        "Export SQL query results to a file. Supports CSV, JSON, and SQL INSERT formats. " <>
+          "Provide table_name when using sql format to set the target table in INSERT statements.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "SQL query whose results to export"},
+          "path" => %{"type" => "string", "description" => "Output file path"},
+          "format" => %{
+            "type" => "string",
+            "enum" => ["csv", "json", "sql"],
+            "description" => "Export format (default: csv)"
+          },
+          "table_name" => %{
+            "type" => "string",
+            "description" => "Table name for SQL INSERT format"
+          },
+          "database" => %{"type" => "string", "description" => "Named connection to use"}
+        },
+        "required" => ["query", "path"],
+        "additionalProperties" => false
+      },
+      permission: :workspace_write,
+      handler: &Builtins.DataExport.execute/1
+    },
+    "data_transform" => %Spec{
+      name: "data_transform",
+      description:
+        "Run a SQL query then apply in-memory transformations: group (with aggregation), " <>
+          "sort, filter, sample, select columns, rename columns, or pivot. " <>
+          "Returns transformed results as a formatted table.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "SQL query to fetch data"},
+          "transform" => %{
+            "type" => "string",
+            "enum" => ["group", "sort", "filter", "sample", "select", "rename", "pivot"]
+          },
+          "group_by" => %{
+            "type" => "string",
+            "description" => "Column to group by (for group transform)"
+          },
+          "agg_column" => %{
+            "type" => "string",
+            "description" => "Column to aggregate (for group transform)"
+          },
+          "agg_function" => %{
+            "type" => "string",
+            "enum" => ["count", "sum", "avg", "min", "max"],
+            "description" => "Aggregation function (default: count)"
+          },
+          "sort_by" => %{
+            "type" => "string",
+            "description" => "Column to sort by (for sort transform)"
+          },
+          "direction" => %{"type" => "string", "enum" => ["asc", "desc"]},
+          "filter_column" => %{"type" => "string"},
+          "filter_op" => %{
+            "type" => "string",
+            "enum" => ["=", "!=", ">", "<", ">=", "<=", "contains"]
+          },
+          "filter_value" => %{"type" => "string"},
+          "columns" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Columns to select (for select transform)"
+          },
+          "renames" => %{
+            "type" => "object",
+            "description" => "Map of old_name => new_name (for rename transform)"
+          },
+          "pivot_column" => %{"type" => "string"},
+          "value_column" => %{"type" => "string"},
+          "group_column" => %{"type" => "string"},
+          "count" => %{"type" => "integer", "minimum" => 1, "description" => "Sample size"},
+          "database" => %{"type" => "string", "description" => "Named connection to use"}
+        },
+        "required" => ["query", "transform"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.DataTransform.execute/1
     }
   }
 

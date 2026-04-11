@@ -352,7 +352,12 @@ defmodule Viber.Runtime.Conversation do
 
   defp process_event({:stream_error, e}, acc, handler) do
     Logger.error("Conversation: stream error received: #{inspect(e)}")
-    handler.({:error, "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"})
+
+    handler.(
+      {:error,
+       "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"}
+    )
+
     %{acc | stream_error: e}
   end
 

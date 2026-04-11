@@ -32,7 +32,10 @@ defmodule Viber.Server.Router do
   get "/sessions/:id/events" do
     case Viber.Server.SessionHandler.get_session(id) do
       {:ok, _pid} ->
-        send_json(conn, 200, %{status: "ok", message: "Use POST /sessions/:id/message to send a message and stream events"})
+        send_json(conn, 200, %{
+          status: "ok",
+          message: "Use POST /sessions/:id/message to send a message and stream events"
+        })
 
       {:error, :not_found} ->
         send_json(conn, 404, %{error: "Session not found"})
