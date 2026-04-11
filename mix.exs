@@ -38,6 +38,7 @@ defmodule Viber.MixProject do
       {:ecto_sql, "~> 3.12"},
       {:postgrex, "~> 0.19"},
       {:myxql, "~> 0.7"},
+      {:quantum, "~> 3.5"},
       {:file_system, "~> 1.0"},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}

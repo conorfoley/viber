@@ -102,6 +102,22 @@ defmodule Viber.Commands.Registry do
       usage: "/reload",
       category: :project,
       handler: Handlers.Reload
+    },
+    %{
+      name: "connect",
+      aliases: [],
+      description: "Connect to a database by name or add a new connection from a URL",
+      usage: "/connect [name] [url]",
+      category: :config,
+      handler: Handlers.Connect
+    },
+    %{
+      name: "databases",
+      aliases: ["dbs"],
+      description: "List configured database connections, test, or remove them",
+      usage: "/databases [test <name>|remove <name>]",
+      category: :config,
+      handler: Handlers.Databases
     }
   ]
 

@@ -378,7 +378,8 @@ defmodule Viber.Tools.Registry do
       description:
         "Execute a SQL query against the active database connection (MySQL or PostgreSQL). " <>
           "Returns results as a formatted table, JSON, or CSV. " <>
-          "Auto-appends LIMIT to unbounded SELECTs. Blocks UPDATE/DELETE without WHERE.",
+          "Auto-appends LIMIT to unbounded SELECTs. Blocks UPDATE/DELETE without WHERE. " <>
+          "DROP/TRUNCATE require explicit confirmation. All queries are audit-logged.",
       input_schema: %{
         "type" => "object",
         "properties" => %{
@@ -405,6 +406,11 @@ defmodule Viber.Tools.Registry do
           "force" => %{
             "type" => "boolean",
             "description" => "Override WHERE-clause safety check for UPDATE/DELETE"
+          },
+          "confirm" => %{
+            "type" => "boolean",
+            "description" =>
+              "Required for DROP/TRUNCATE — explicitly confirm destructive operations"
           }
         },
         "required" => ["query"],
@@ -556,6 +562,76 @@ defmodule Viber.Tools.Registry do
       },
       permission: :read_only,
       handler: &Builtins.DataTransform.execute/1
+    },
+    "scheduler" => %Spec{
+      name: "scheduler",
+      description:
+        "Manage scheduled cron jobs: create, list, update, delete, enable/disable, " <>
+          "run immediately, and view execution history. " <>
+          "Jobs can run SQL queries, shell scripts, or health checks on a cron schedule " <>
+          "with optional alert rules that trigger notifications via Slack, file, or log.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "list",
+              "create",
+              "update",
+              "delete",
+              "enable",
+              "disable",
+              "run_now",
+              "history"
+            ]
+          },
+          "id" => %{
+            "type" => "string",
+            "description" => "Job ID (for update/delete/enable/disable/run_now)"
+          },
+          "name" => %{"type" => "string", "description" => "Job name (for create)"},
+          "cron_expr" => %{
+            "type" => "string",
+            "description" => "Cron expression, e.g. '0 */6 * * *' (for create/update)"
+          },
+          "type" => %{
+            "type" => "string",
+            "enum" => ["query", "script", "health_check"],
+            "description" => "Job type (default: query)"
+          },
+          "payload" => %{
+            "type" => "object",
+            "description" =>
+              "Job payload: {\"query\": \"...\"} for query type, {\"script\": \"...\"} for script type"
+          },
+          "database" => %{"type" => "string", "description" => "Named database connection to use"},
+          "alert_rule" => %{
+            "type" => "object",
+            "description" =>
+              "Alert condition: {\"condition\": \"row_count_gt\", \"threshold\": 0}"
+          },
+          "alert_sink" => %{
+            "type" => "object",
+            "description" =>
+              "Alert destination: {\"type\": \"slack\", \"webhook_url\": \"...\"} or {\"type\": \"file\", \"path\": \"...\"} or {\"type\": \"log\"}"
+          },
+          "enabled" => %{
+            "type" => "boolean",
+            "description" => "Whether the job is enabled (default: true)"
+          },
+          "limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Number of history entries to return"
+          }
+        },
+        "required" => ["action"],
+        "additionalProperties" => false
+      },
+      permission: :danger_full_access,
+      permission_fn: &Builtins.Scheduler.permission_for/1,
+      handler: &Builtins.Scheduler.execute/1
     }
   }
 

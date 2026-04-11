@@ -3,7 +3,7 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
   Execute SQL queries against a managed database connection with safety guardrails.
   """
 
-  alias Viber.Database.ConnectionManager
+  alias Viber.Database.{AuditLogger, ConnectionManager}
 
   @default_timeout 30_000
   @default_limit 100
@@ -20,8 +20,11 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
 
     with {:ok, conn_name, repo} <- resolve_repo_with_name(input["database"]),
          :ok <- check_read_only(conn_name, query),
-         {:ok, safe_query} <- apply_safety(query, input) do
-      run_query(repo, safe_query, format, timeout)
+         {:ok, safe_query} <- apply_safety(query, input),
+         {:ok, safe_query} <- check_ddl_guardrails(safe_query, input) do
+      result = run_query(repo, safe_query, format, timeout)
+      audit_result(conn_name, safe_query, result, input)
+      result
     end
   end
 
@@ -79,14 +82,6 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
     normalized = query |> String.trim() |> String.upcase()
 
     cond do
-      starts_with_any?(normalized, @ddl_prefixes) ->
-        {:ok, query}
-
-      starts_with_any?(normalized, @write_prefixes) && !has_where?(normalized) &&
-          input["force"] != true ->
-        {:error,
-         "Refusing #{hd(String.split(normalized))} without WHERE clause. Add a WHERE clause or pass \"force\": true to override."}
-
       starts_with_any?(normalized, @read_only_prefixes) && !has_limit?(normalized) ->
         limit = input["limit"] || @default_limit
         {:ok, String.trim_trailing(query, ";") <> " LIMIT #{limit}"}
@@ -98,6 +93,107 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
 
   defp has_where?(normalized), do: normalized =~ ~r/\bWHERE\b/
   defp has_limit?(normalized), do: normalized =~ ~r/\bLIMIT\b/
+
+  defp check_ddl_guardrails(query, input) do
+    normalized = query |> String.trim() |> String.upcase()
+
+    cond do
+      (String.starts_with?(normalized, "DROP") || String.starts_with?(normalized, "TRUNCATE")) &&
+          input["confirm"] != true ->
+        {:error,
+         "⚠ DESTRUCTIVE: #{hd(String.split(normalized))} operation detected.\n" <>
+           "This will permanently destroy data. Pass \"confirm\": true to proceed.\n" <>
+           "Query: #{String.slice(query, 0, 200)}"}
+
+      starts_with_any?(normalized, @write_prefixes) && !has_where?(normalized) &&
+          input["force"] != true ->
+        table = extract_table_name(normalized)
+
+        {:error,
+         "Refusing #{hd(String.split(normalized))} without WHERE clause. " <>
+           "Add a WHERE clause or pass \"force\": true to override." <>
+           if(table,
+             do: "\nConsider running: SELECT COUNT(*) FROM #{table} first to check scope.",
+             else: ""
+           )}
+
+      starts_with_any?(normalized, @write_prefixes) ->
+        {:ok, query}
+
+      true ->
+        {:ok, query}
+    end
+  end
+
+  defp extract_table_name(normalized) do
+    cond do
+      normalized =~ ~r/\bUPDATE\s+(\S+)/ ->
+        [_, table] = Regex.run(~r/\bUPDATE\s+(\S+)/i, normalized)
+        table
+
+      normalized =~ ~r/\bDELETE\s+FROM\s+(\S+)/ ->
+        [_, table] = Regex.run(~r/\bDELETE\s+FROM\s+(\S+)/i, normalized)
+        table
+
+      normalized =~ ~r/\bINSERT\s+INTO\s+(\S+)/ ->
+        [_, table] = Regex.run(~r/\bINSERT\s+INTO\s+(\S+)/i, normalized)
+        table
+
+      true ->
+        nil
+    end
+  end
+
+  defp audit_result(conn_name, query, result, input) do
+    {status, row_count, error_msg} =
+      case result do
+        {:ok, output} ->
+          rows = extract_row_count(output)
+          {"success", rows, nil}
+
+        {:error, msg} ->
+          {"failure", nil, msg}
+      end
+
+    AuditLogger.log_query(%{
+      session_id: input["_session_id"],
+      connection_name: conn_name,
+      query: String.slice(query, 0, 10_000),
+      query_type: classify_query_type(query),
+      execution_time_ms: extract_time(result),
+      row_count: row_count,
+      status: status,
+      error_message: error_msg,
+      user_confirmed: input["force"] == true || input["confirm"] == true
+    })
+  end
+
+  defp classify_query_type(query) do
+    normalized = query |> String.trim() |> String.upcase()
+
+    cond do
+      starts_with_any?(normalized, @ddl_prefixes) -> "DDL"
+      starts_with_any?(normalized, @write_prefixes) -> "WRITE"
+      starts_with_any?(normalized, @read_only_prefixes) -> "READ"
+      true -> "OTHER"
+    end
+  end
+
+  defp extract_row_count(output) do
+    case Regex.run(~r/(\d+) row\(s\)/, output) do
+      [_, count] -> String.to_integer(count)
+      _ -> nil
+    end
+  end
+
+  defp extract_time({:ok, output}) do
+    case Regex.run(~r/(\d+)ms/, output) do
+      [_, ms] -> String.to_integer(ms)
+      _ -> nil
+    end
+  end
+
+  defp extract_time(_), do: nil
 
   defp run_query(repo, query, format, timeout) do
     start = System.monotonic_time(:millisecond)

@@ -89,8 +89,22 @@ defmodule Viber.Database.ConnectionManager do
     end
   end
 
+  @spec add_connection_from_url(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def add_connection_from_url(name, url) do
+    case parse_connection_url(url) do
+      {:ok, config} -> add_connection(Map.put(config, :name, name))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec test_connection(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def test_connection(name) do
+    GenServer.call(__MODULE__, {:test_connection, name}, 15_000)
+  end
+
   @impl true
   def init(_opts) do
+    send(self(), :load_config_file)
     {:ok, %{connections: %{}, repos: %{}, active: nil, active_by_session: %{}}}
   end
 
@@ -194,6 +208,127 @@ defmodule Viber.Database.ConnectionManager do
     case Map.fetch(state.connections, name) do
       {:ok, config} -> {:reply, {:ok, config}, state}
       :error -> {:reply, {:error, "Unknown connection: #{name}"}, state}
+    end
+  end
+
+  def handle_call({:test_connection, name}, _from, state) do
+    case Map.fetch(state.connections, name) do
+      {:ok, _config} ->
+        case Map.fetch(state.repos, name) do
+          {:ok, repo} ->
+            try do
+              case Ecto.Adapters.SQL.query(repo, "SELECT 1", [], timeout: 5_000) do
+                {:ok, _} ->
+                  {:reply, {:ok, "Connection '#{name}' is healthy"}, state}
+
+                {:error, reason} ->
+                  {:reply, {:error, "Connection test failed: #{inspect(reason)}"}, state}
+              end
+            rescue
+              e -> {:reply, {:error, "Connection test failed: #{Exception.message(e)}"}, state}
+            end
+
+          :error ->
+            {:reply,
+             {:error, "Connection '#{name}' is not connected. Use /connect #{name} first."},
+             state}
+        end
+
+      :error ->
+        {:reply, {:error, "Unknown connection: #{name}"}, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:load_config_file, state) do
+    state = load_databases_config(state)
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp load_databases_config(state) do
+    path = config_file_path()
+
+    if File.exists?(path) do
+      try do
+        {configs, _} = Code.eval_file(path)
+
+        Enum.reduce(List.wrap(configs), state, fn config, acc ->
+          config = normalize_config(config)
+          name = config.name
+          acc = put_in(acc, [:connections, name], config)
+          Logger.info("Loaded database config: #{name}")
+          acc
+        end)
+      rescue
+        e ->
+          Logger.warning("Failed to load #{path}: #{Exception.message(e)}")
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp normalize_config(config) when is_map(config) do
+    type = config[:type] || config["type"] || infer_type(config)
+
+    %{
+      name: config[:name] || config["name"],
+      type: type,
+      hostname: config[:hostname] || config["hostname"] || "localhost",
+      port: config[:port] || config["port"] || default_port(type),
+      username: config[:username] || config["username"] || "",
+      password: config[:password] || config["password"] || "",
+      database: config[:database] || config["database"] || "",
+      read_only: config[:read_only] || config["read_only"] || false,
+      pool_size: config[:pool_size] || config["pool_size"] || 5
+    }
+  end
+
+  defp infer_type(config) do
+    port = config[:port] || config["port"]
+    if port == 3306, do: :mysql, else: :postgres
+  end
+
+  defp config_file_path do
+    Path.join([System.user_home!(), ".viber", "databases.exs"])
+  end
+
+  @spec parse_connection_url(String.t()) :: {:ok, map()} | {:error, String.t()}
+  def parse_connection_url(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host, port: port, userinfo: userinfo, path: path}
+      when scheme in ["mysql", "postgres", "postgresql"] and not is_nil(host) ->
+        type = if scheme == "mysql", do: :mysql, else: :postgres
+        {username, password} = parse_userinfo(userinfo)
+        database = if path, do: String.trim_leading(path, "/"), else: ""
+
+        {:ok,
+         %{
+           type: type,
+           hostname: host,
+           port: port || default_port(type),
+           username: username,
+           password: password,
+           database: database,
+           read_only: false,
+           pool_size: 5
+         }}
+
+      _ ->
+        {:error,
+         "Invalid connection URL. Expected: mysql://user:pass@host:port/database or postgres://..."}
+    end
+  end
+
+  defp parse_userinfo(nil), do: {"", ""}
+
+  defp parse_userinfo(userinfo) do
+    case String.split(userinfo, ":", parts: 2) do
+      [user, pass] -> {URI.decode(user), URI.decode(pass)}
+      [user] -> {URI.decode(user), ""}
     end
   end
 
