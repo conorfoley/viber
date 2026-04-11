@@ -42,7 +42,7 @@ defmodule Viber.Runtime.Compact do
     |> div(@chars_per_token)
   end
 
-  @spec compact(GenServer.server(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec compact(GenServer.server(), keyword()) :: {:ok, non_neg_integer()}
   def compact(session, opts \\ []) do
     messages = Session.get_messages(session)
     preserve = Keyword.get(opts, :preserve_recent, @preserve_recent)

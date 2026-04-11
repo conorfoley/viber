@@ -5,15 +5,19 @@ defmodule Viber.Server.SessionHandler do
 
   alias Viber.Runtime.Session
 
-  @spec create_session(map()) :: {:ok, map()}
+  @spec create_session(map()) :: {:ok, map()} | {:error, term()}
   def create_session(params) do
     id = Integer.to_string(System.unique_integer([:monotonic, :positive]))
     opts = [id: id, name: {:via, Registry, {Viber.SessionRegistry, id}}]
 
-    {:ok, _pid} = DynamicSupervisor.start_child(Viber.SessionSupervisor, {Session, opts})
+    case DynamicSupervisor.start_child(Viber.SessionSupervisor, {Session, opts}) do
+      {:ok, _pid} ->
+        model = params["model"] || "sonnet"
+        {:ok, %{id: id, model: model}}
 
-    model = params["model"] || "sonnet"
-    {:ok, %{id: id, model: model}}
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @spec send_message(String.t(), map(), (Viber.Runtime.Conversation.event() -> :ok)) ::
