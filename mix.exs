@@ -10,7 +10,8 @@ defmodule Viber.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       escript: escript(),
       deps: deps(),
-      dialyzer: [plt_add_apps: [:mix]]
+      dialyzer: [plt_add_apps: [:mix]],
+      licenses: ["AGPL-3.0-only"]
     ]
   end
 
