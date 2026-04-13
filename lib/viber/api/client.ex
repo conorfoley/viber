@@ -8,7 +8,7 @@ defmodule Viber.API.Client do
   alias Viber.API.{Error, MessageRequest, MessageResponse}
   alias Viber.API.Providers.{Anthropic, OpenAICompat}
 
-  @type provider_kind :: :anthropic | :openai | :xai
+  @type provider_kind :: :anthropic | :openai | :xai | :ollama
 
   @model_aliases %{
     "opus" => "claude-opus-4-6",
@@ -58,6 +58,9 @@ defmodule Viber.API.Client do
       env_key_set?("XAI_API_KEY") ->
         :xai
 
+      env_key_set?("OLLAMA_HOST") ->
+        :ollama
+
       true ->
         Logger.warning("No API key found in environment, defaulting to :anthropic")
         :anthropic
@@ -81,6 +84,7 @@ defmodule Viber.API.Client do
       :anthropic -> {:ok, :anthropic, Anthropic}
       :openai -> {:ok, :openai, OpenAICompat}
       :xai -> {:ok, :xai, OpenAICompat}
+      :ollama -> {:ok, :ollama, OpenAICompat}
     end
   end
 
