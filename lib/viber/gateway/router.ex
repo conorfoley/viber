@@ -155,8 +155,11 @@ defmodule Viber.Gateway.Router do
     if config[:application_id] do
       Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
         case Viber.Gateway.Discord.Adapter.register_commands(config) do
-          :ok -> Logger.info("Gateway: Discord slash commands registered")
-          {:error, reason} -> Logger.warning("Gateway: Discord command registration failed: #{inspect(reason)}")
+          :ok ->
+            Logger.info("Gateway: Discord slash commands registered")
+
+          {:error, reason} ->
+            Logger.warning("Gateway: Discord command registration failed: #{inspect(reason)}")
         end
       end)
     end
@@ -237,7 +240,7 @@ defmodule Viber.Gateway.Router do
           model: Application.get_env(:viber, :gateway_model, "sonnet"),
           user_input: msg.text,
           event_handler: event_handler,
-          permission_mode: :allow
+          permission_mode: Application.get_env(:viber, :gateway_permission_mode, :allow)
         )
       end)
 

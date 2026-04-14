@@ -3,7 +3,7 @@ defmodule Viber.Server.SessionHandler do
   Session lifecycle management for HTTP API.
   """
 
-  alias Viber.Runtime.Session
+  alias Viber.Runtime.{Permissions, Session}
 
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
   def create_session(params) do
@@ -30,6 +30,12 @@ defmodule Viber.Server.SessionHandler do
 
         browser_context = params["browser_context"] || %{}
 
+        permission_mode =
+          case params["permission_mode"] do
+            nil -> Application.get_env(:viber, :server_permission_mode, :prompt)
+            mode -> Permissions.mode_from_string(mode)
+          end
+
         task =
           Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
             Viber.Runtime.Conversation.run(
@@ -37,7 +43,7 @@ defmodule Viber.Server.SessionHandler do
               model: model,
               user_input: user_input,
               event_handler: event_handler,
-              permission_mode: :allow,
+              permission_mode: permission_mode,
               browser_context: browser_context
             )
           end)
