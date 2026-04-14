@@ -20,10 +20,20 @@ defmodule Viber.Commands.Handlers.Model do
   def execute(["list" | _], _context) do
     aliases = Client.model_aliases()
 
-    lines =
+    groups =
       aliases
-      |> Enum.sort_by(fn {alias_, _} -> alias_ end)
-      |> Enum.map(fn {alias_, full} -> "  #{alias_} → #{full}" end)
+      |> Enum.group_by(fn {_alias, full} -> provider_label(full) end)
+      |> Enum.sort_by(fn {provider, _} -> provider end)
+
+    lines =
+      Enum.flat_map(groups, fn {provider, entries} ->
+        rows =
+          entries
+          |> Enum.sort_by(fn {alias_, _} -> alias_ end)
+          |> Enum.map(fn {alias_, full} -> "    #{alias_} → #{full}" end)
+
+        ["  #{provider}:" | rows]
+      end)
 
     header = "Available model aliases:"
     {:ok, Enum.join([header | lines], "\n")}
@@ -38,4 +48,18 @@ defmodule Viber.Commands.Handlers.Model do
       {:ok, "Switched to model: #{new_model} (#{resolved})"}
     end
   end
+
+  defp provider_label("claude" <> _), do: "Anthropic"
+  defp provider_label("grok" <> _), do: "xAI"
+  defp provider_label("gpt-" <> _), do: "OpenAI"
+  defp provider_label("ollama:" <> _), do: "Ollama"
+
+  defp provider_label("o" <> rest) do
+    case rest do
+      <<c, _::binary>> when c in ?0..?9 -> "OpenAI"
+      _ -> "Other"
+    end
+  end
+
+  defp provider_label(_), do: "Other"
 end

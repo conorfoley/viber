@@ -1,6 +1,6 @@
 defmodule Viber.API.Providers.OpenAICompat do
   @moduledoc """
-  OpenAI-compatible API provider (OpenAI, xAI).
+  OpenAI-compatible API provider (OpenAI, xAI, Ollama).
   """
 
   @behaviour Viber.API.Provider
@@ -8,13 +8,23 @@ defmodule Viber.API.Providers.OpenAICompat do
   alias Viber.API.{Error, MessageRequest, SSEParser, Usage}
   alias Viber.API.Providers.OpenAIStreamState
 
-  defstruct [:provider_name, :api_key_env, :base_url_env, :default_base_url, optional_key: false]
+  defstruct [
+    :provider_name,
+    :api_key_env,
+    :base_url_env,
+    :default_base_url,
+    :base_url_override,
+    :api_key_override,
+    optional_key: false
+  ]
 
   @type t :: %__MODULE__{
           provider_name: String.t(),
           api_key_env: String.t(),
           base_url_env: String.t(),
           default_base_url: String.t(),
+          base_url_override: String.t() | nil,
+          api_key_override: String.t() | nil,
           optional_key: boolean()
         }
 
@@ -52,7 +62,8 @@ defmodule Viber.API.Providers.OpenAICompat do
   @impl true
   def send_message(%MessageRequest{} = request) do
     config = config_for_model(request.model)
-    send_message(request, config)
+    config = apply_overrides(config, request.provider_overrides)
+    send_message(%{request | model: strip_ollama_prefix(request.model)}, config)
   end
 
   @spec send_message(MessageRequest.t(), t()) ::
@@ -84,7 +95,8 @@ defmodule Viber.API.Providers.OpenAICompat do
   @impl true
   def stream_message(%MessageRequest{} = request) do
     config = config_for_model(request.model)
-    stream_message(request, config)
+    config = apply_overrides(config, request.provider_overrides)
+    stream_message(%{request | model: strip_ollama_prefix(request.model)}, config)
   end
 
   @spec stream_message(MessageRequest.t(), t()) :: {:ok, Enumerable.t()} | {:error, Error.t()}
@@ -135,7 +147,7 @@ defmodule Viber.API.Providers.OpenAICompat do
     }
 
     payload =
-      if request.max_tokens do
+      if request.max_tokens && request.max_tokens > 0 do
         Map.put(payload, token_limit_key, request.max_tokens)
       else
         payload
@@ -317,6 +329,7 @@ defmodule Viber.API.Providers.OpenAICompat do
 
   defp config_for_model(model) do
     cond do
+      String.starts_with?(model, "ollama:") -> ollama()
       String.starts_with?(model, "grok") -> xai()
       String.starts_with?(model, "gpt-") -> openai()
       String.match?(model, ~r/^o\d/) -> openai()
@@ -325,12 +338,33 @@ defmodule Viber.API.Providers.OpenAICompat do
     end
   end
 
-  defp ollama_host_configured? do
-    case System.get_env("OLLAMA_HOST") do
-      nil -> false
-      "" -> false
-      _ -> true
-    end
+  defp strip_ollama_prefix("ollama:" <> model), do: model
+  defp strip_ollama_prefix(model), do: model
+
+  defp apply_overrides(config, nil), do: config
+  defp apply_overrides(config, overrides) when overrides == %{}, do: config
+
+  defp apply_overrides(config, overrides) do
+    config
+    |> then(fn c ->
+      case Map.get(overrides, :base_url) do
+        nil -> c
+        url -> %{c | base_url_override: url}
+      end
+    end)
+    |> then(fn c ->
+      case Map.get(overrides, :api_key) do
+        nil -> c
+        key -> %{c | api_key_override: key}
+      end
+    end)
+  end
+
+  defp ollama_host_configured?, do: Viber.Env.key_set?("OLLAMA_HOST")
+
+  defp get_api_key(%__MODULE__{api_key_override: override})
+       when is_binary(override) and override != "" do
+    {:ok, override}
   end
 
   defp get_api_key(%__MODULE__{optional_key: true} = config) do
@@ -347,7 +381,9 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp build_req(api_key, %__MODULE__{} = config) do
-    raw_url = System.get_env(config.base_url_env) || config.default_base_url
+    raw_url =
+      config.base_url_override || System.get_env(config.base_url_env) || config.default_base_url
+
     base_url = normalize_base_url(raw_url, config)
 
     Req.new(
@@ -359,7 +395,8 @@ defmodule Viber.API.Providers.OpenAICompat do
     )
   end
 
-  defp normalize_base_url(url, %__MODULE__{provider_name: "Ollama"}) do
+  @spec normalize_base_url(String.t(), t()) :: String.t()
+  def normalize_base_url(url, %__MODULE__{provider_name: "Ollama"}) do
     trimmed = String.trim_trailing(url, "/")
 
     if String.ends_with?(trimmed, "/v1") do
@@ -369,7 +406,7 @@ defmodule Viber.API.Providers.OpenAICompat do
     end
   end
 
-  defp normalize_base_url(url, _config), do: url
+  def normalize_base_url(url, _config), do: url
 
   defp chat_completions_path(%__MODULE__{} = config) do
     base_url = System.get_env(config.base_url_env) || config.default_base_url

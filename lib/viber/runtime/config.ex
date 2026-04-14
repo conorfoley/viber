@@ -19,6 +19,9 @@ defmodule Viber.Runtime.Config do
 
   @type t :: %__MODULE__{
           model: String.t() | nil,
+          provider: String.t() | nil,
+          base_url: String.t() | nil,
+          api_key: String.t() | nil,
           permission_mode: atom() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
@@ -27,6 +30,9 @@ defmodule Viber.Runtime.Config do
         }
 
   defstruct model: nil,
+            provider: nil,
+            base_url: nil,
+            api_key: nil,
             permission_mode: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
@@ -57,6 +63,9 @@ defmodule Viber.Runtime.Config do
   def merge(%__MODULE__{} = base, %__MODULE__{} = override) do
     %__MODULE__{
       model: override.model || base.model,
+      provider: override.provider || base.provider,
+      base_url: override.base_url || base.base_url,
+      api_key: override.api_key || base.api_key,
       permission_mode: override.permission_mode || base.permission_mode,
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
       hooks: %{
@@ -72,6 +81,8 @@ defmodule Viber.Runtime.Config do
   def get(%__MODULE__{} = config, path) do
     case String.split(path, ".") do
       ["model"] -> config.model
+      ["provider"] -> config.provider
+      ["baseUrl"] -> config.base_url
       ["permissionMode"] -> config.permission_mode
       ["customInstructions"] -> config.custom_instructions
       ["mcpServers"] -> config.mcp_servers
@@ -108,6 +119,9 @@ defmodule Viber.Runtime.Config do
   defp from_map(data, source, path) when is_map(data) do
     %__MODULE__{
       model: data["model"],
+      provider: data["provider"],
+      base_url: data["baseUrl"],
+      api_key: data["apiKey"],
       permission_mode: parse_permission_mode(data["permissions"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),

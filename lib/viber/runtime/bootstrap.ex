@@ -1,7 +1,47 @@
 defmodule Viber.Runtime.Bootstrap do
   @moduledoc """
-  Project stack detection from filesystem markers.
+  Project stack detection from filesystem markers and startup credential checks.
   """
+
+  require Logger
+
+  @provider_env_vars [
+    {"ANTHROPIC_API_KEY", "Anthropic Claude"},
+    {"OPENAI_API_KEY", "OpenAI"},
+    {"XAI_API_KEY", "xAI Grok"},
+    {"OLLAMA_HOST", "Ollama (local)"}
+  ]
+
+  @spec check_provider_credentials(String.t()) :: :ok | {:warn, String.t()}
+  def check_provider_credentials(model) do
+    is_ollama = String.starts_with?(model, "ollama:")
+
+    any_cloud_key =
+      Enum.any?(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY"], &env_key_set?/1)
+
+    ollama_host = env_key_set?("OLLAMA_HOST")
+
+    cond do
+      is_ollama && not ollama_host ->
+        {:warn,
+         "Model \"#{model}\" targets Ollama but OLLAMA_HOST is not set. " <>
+           "Defaulting to http://localhost:11434 — set OLLAMA_HOST to override."}
+
+      not is_ollama && not any_cloud_key && not ollama_host ->
+        configured =
+          @provider_env_vars
+          |> Enum.map_join(", ", fn {var, label} -> "#{var} (#{label})" end)
+
+        {:warn,
+         "No LLM provider credentials detected. " <>
+           "Set one of: #{configured}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp env_key_set?(var), do: Viber.Env.key_set?(var)
 
   @type stack_info :: %{
           language: String.t() | nil,

@@ -6,7 +6,7 @@ defmodule Viber.CLI.Main do
   require Logger
 
   alias Viber.CLI.{Init, Repl}
-  alias Viber.Runtime.{Config, Permissions, Session}
+  alias Viber.Runtime.{Bootstrap, Config, Permissions, Session}
   alias Viber.API.Client
   alias Viber.Tools.MCP.ServerManager
 
@@ -79,6 +79,11 @@ defmodule Viber.CLI.Main do
       end
 
     ServerManager.start_servers(config)
+
+    case Bootstrap.check_provider_credentials(resolved_model) do
+      {:warn, message} -> IO.puts("\n⚠  #{message}\n")
+      :ok -> :ok
+    end
 
     project_root = File.cwd!()
 

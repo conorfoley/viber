@@ -20,7 +20,16 @@ defmodule Viber.API.Client do
     "gpt41" => "gpt-4.1",
     "o3" => "o3",
     "o3-mini" => "o3-mini",
-    "o4-mini" => "o4-mini"
+    "o4-mini" => "o4-mini",
+    "llama3" => "ollama:llama3",
+    "llama3.1" => "ollama:llama3.1",
+    "llama3.2" => "ollama:llama3.2",
+    "mistral" => "ollama:mistral",
+    "codestral" => "ollama:codestral",
+    "qwen2.5" => "ollama:qwen2.5",
+    "phi4" => "ollama:phi4",
+    "gemma3" => "ollama:gemma3",
+    "deepseek-r1" => "ollama:deepseek-r1"
   }
 
   @spec model_aliases() :: %{String.t() => String.t()}
@@ -37,6 +46,9 @@ defmodule Viber.API.Client do
     model = resolve_model_alias(model)
 
     cond do
+      String.starts_with?(model, "ollama:") ->
+        :ollama
+
       String.starts_with?(model, "claude") ->
         :anthropic
 
@@ -67,14 +79,14 @@ defmodule Viber.API.Client do
     end
   end
 
-  @spec max_tokens_for_model(String.t()) :: pos_integer()
+  @spec max_tokens_for_model(String.t()) :: pos_integer() | nil
   def max_tokens_for_model(model) do
     canonical = resolve_model_alias(model)
 
-    if String.contains?(canonical, "opus") do
-      32_000
-    else
-      64_000
+    cond do
+      String.starts_with?(canonical, "ollama:") -> nil
+      String.contains?(canonical, "opus") -> 32_000
+      true -> 64_000
     end
   end
 
@@ -88,26 +100,44 @@ defmodule Viber.API.Client do
     end
   end
 
-  @spec send_message(String.t(), MessageRequest.t()) ::
+  @spec send_message(String.t(), MessageRequest.t(), keyword()) ::
           {:ok, MessageResponse.t()} | {:error, Error.t()}
-  def send_message(model, %MessageRequest{} = request) do
+  def send_message(model, %MessageRequest{} = request, opts \\ []) do
     model = resolve_model_alias(model)
     request = %{request | model: model}
 
     with {:ok, _kind, module} <- from_model(model) do
+      request = apply_config_overrides(request, opts)
       send_with_retry(module, request)
     end
   end
 
-  @spec stream_message(String.t(), MessageRequest.t()) ::
+  @spec stream_message(String.t(), MessageRequest.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
-  def stream_message(model, %MessageRequest{} = request) do
+  def stream_message(model, %MessageRequest{} = request, opts \\ []) do
     model = resolve_model_alias(model)
     request = %{request | model: model}
 
     with {:ok, kind, module} <- from_model(model) do
       Logger.info("Streaming message: model=#{model} provider=#{kind} module=#{module}")
+      request = apply_config_overrides(request, opts)
       module.stream_message(request)
+    end
+  end
+
+  defp apply_config_overrides(request, opts) do
+    overrides =
+      Enum.reduce([:base_url, :api_key], %{}, fn key, acc ->
+        case Keyword.get(opts, key) do
+          nil -> acc
+          val -> Map.put(acc, key, val)
+        end
+      end)
+
+    if map_size(overrides) > 0 do
+      %{request | provider_overrides: overrides}
+    else
+      request
     end
   end
 
@@ -151,11 +181,5 @@ defmodule Viber.API.Client do
     trunc(:math.pow(2, attempt) * 1_000)
   end
 
-  defp env_key_set?(var) do
-    case System.get_env(var) do
-      nil -> false
-      "" -> false
-      _ -> true
-    end
-  end
+  defp env_key_set?(var), do: Viber.Env.key_set?(var)
 end

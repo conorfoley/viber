@@ -95,8 +95,8 @@ defmodule Viber.Runtime.Conversation do
     end
   end
 
-  defp do_stream(request, %Context{provider_module: nil, model: model}) do
-    Client.stream_message(model, request)
+  defp do_stream(request, %Context{provider_module: nil, model: model, config: config}) do
+    Client.stream_message(model, request, config_overrides(config))
   end
 
   defp do_stream(request, %Context{provider_module: provider_module}) do
@@ -415,4 +415,20 @@ defmodule Viber.Runtime.Conversation do
     end)
     |> Enum.join()
   end
+
+  defp config_overrides(nil), do: []
+
+  defp config_overrides(%Viber.Runtime.Config{} = config) do
+    []
+    |> then(fn opts ->
+      if config.base_url, do: [{:base_url, config.base_url} | opts], else: opts
+    end)
+    |> then(fn opts ->
+      if is_binary(config.api_key) and config.api_key != "",
+        do: [{:api_key, config.api_key} | opts],
+        else: opts
+    end)
+  end
+
+  defp config_overrides(_), do: []
 end

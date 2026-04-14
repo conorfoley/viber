@@ -5,16 +5,26 @@ defmodule Viber.API.MessageRequest do
 
   @type t :: %__MODULE__{
           model: String.t(),
-          max_tokens: pos_integer(),
+          max_tokens: pos_integer() | nil,
           messages: [Viber.API.InputMessage.t()],
           system: String.t() | nil,
           tools: [Viber.API.ToolDefinition.t()] | nil,
           tool_choice: atom() | {:tool, String.t()} | nil,
-          stream: boolean()
+          stream: boolean(),
+          provider_overrides: map()
         }
 
-  @enforce_keys [:model, :max_tokens, :messages]
-  defstruct [:model, :max_tokens, :messages, :system, :tools, :tool_choice, stream: false]
+  @enforce_keys [:model, :messages]
+  defstruct [
+    :model,
+    :max_tokens,
+    :messages,
+    :system,
+    :tools,
+    :tool_choice,
+    stream: false,
+    provider_overrides: %{}
+  ]
 
   @spec with_streaming(t()) :: t()
   def with_streaming(%__MODULE__{} = req), do: %{req | stream: true}
