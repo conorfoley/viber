@@ -6,7 +6,7 @@ defmodule Viber.Runtime.Conversation do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Permissions, Prompt, Session, Usage}
+  alias Viber.Runtime.{Permissions, Prompt, Session, SubAgent, Usage}
   alias Viber.Runtime.Conversation.{Context, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
 
@@ -29,7 +29,8 @@ defmodule Viber.Runtime.Conversation do
       event_handler: Keyword.get(opts, :event_handler, fn _event -> :ok end),
       permission_mode: Keyword.get(opts, :permission_mode, :prompt),
       project_root: Keyword.get(opts, :project_root, File.cwd!()),
-      provider_module: Keyword.get(opts, :provider_module)
+      provider_module: Keyword.get(opts, :provider_module),
+      browser_context: Keyword.get(opts, :browser_context, %{})
     }
 
     user_input = Keyword.fetch!(opts, :user_input)
@@ -53,7 +54,8 @@ defmodule Viber.Runtime.Conversation do
       Prompt.build(
         config: ctx.config,
         permission_mode: ctx.permission_mode,
-        project_root: ctx.project_root
+        project_root: ctx.project_root,
+        browser_context: ctx.browser_context
       )
 
     Logger.debug(
@@ -207,6 +209,20 @@ defmodule Viber.Runtime.Conversation do
       |> Task.Supervisor.async_stream_nolink(
         decisions,
         fn
+          {:run, id, "spawn_agent", input} ->
+            event_handler.({:tool_use_start, "spawn_agent", id})
+
+            case SubAgent.run(input, ctx) do
+              {:ok, %{text: text}} ->
+                event_handler.({:tool_result, "spawn_agent", text, false})
+                {id, "spawn_agent", text, false}
+
+              {:error, reason} ->
+                msg = "Sub-agent failed: #{inspect(reason)}"
+                event_handler.({:tool_result, "spawn_agent", msg, true})
+                {id, "spawn_agent", msg, true}
+            end
+
           {:run, id, name, input} ->
             event_handler.({:tool_use_start, name, id})
 
@@ -225,7 +241,7 @@ defmodule Viber.Runtime.Conversation do
             {id, name, reason, true}
         end,
         ordered: true,
-        timeout: 120_000
+        timeout: 300_000
       )
       |> Enum.to_list()
 

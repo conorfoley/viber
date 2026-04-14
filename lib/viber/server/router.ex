@@ -5,6 +5,7 @@ defmodule Viber.Server.Router do
 
   use Plug.Router
 
+  plug(Viber.Server.CORSPlug)
   plug(:match)
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:dispatch)

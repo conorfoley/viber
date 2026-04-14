@@ -28,6 +28,8 @@ defmodule Viber.Server.SessionHandler do
         user_input = params["message"] || ""
         model = params["model"] || "sonnet"
 
+        browser_context = params["browser_context"] || %{}
+
         task =
           Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
             Viber.Runtime.Conversation.run(
@@ -35,7 +37,8 @@ defmodule Viber.Server.SessionHandler do
               model: model,
               user_input: user_input,
               event_handler: event_handler,
-              permission_mode: :allow
+              permission_mode: :allow,
+              browser_context: browser_context
             )
           end)
 

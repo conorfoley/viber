@@ -9,7 +9,8 @@ defmodule Viber.Runtime.Conversation.Context do
           permission_mode: atom(),
           project_root: String.t(),
           provider_module: module() | nil,
-          task_supervisor: atom()
+          task_supervisor: atom(),
+          browser_context: map()
         }
 
   @enforce_keys [:session, :model, :event_handler]
@@ -21,6 +22,7 @@ defmodule Viber.Runtime.Conversation.Context do
     :event_handler,
     permission_mode: :prompt,
     project_root: ".",
-    task_supervisor: Viber.TaskSupervisor
+    task_supervisor: Viber.TaskSupervisor,
+    browser_context: %{}
   ]
 end

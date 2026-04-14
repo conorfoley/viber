@@ -11,7 +11,8 @@ defmodule Viber.MixProject do
       escript: escript(),
       deps: deps(),
       dialyzer: [plt_add_apps: [:mix]],
-      licenses: ["AGPL-3.0-only"]
+      licenses: ["AGPL-3.0-only"],
+      aliases: aliases()
     ]
   end
 
@@ -27,6 +28,12 @@ defmodule Viber.MixProject do
 
   defp escript do
     [main_module: Viber.CLI.Main]
+  end
+
+  defp aliases do
+    [
+      "test.live": ["test --include live"]
+    ]
   end
 
   defp deps do

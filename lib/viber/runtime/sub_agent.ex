@@ -1,0 +1,70 @@
+defmodule Viber.Runtime.SubAgent do
+  @moduledoc """
+  Runs an isolated conversation turn as a child agent and returns the final text response.
+
+  Sub-agents inherit model, config, project_root, permission_mode, and provider from the
+  parent context but start with a fresh session (no conversation history).
+  """
+
+  require Logger
+
+  alias Viber.Runtime.{Conversation, Session}
+  alias Viber.Runtime.Conversation.Context
+
+  @type result :: %{
+          text: String.t(),
+          iterations: non_neg_integer()
+        }
+
+  @spec run(map(), Context.t()) :: {:ok, result()} | {:error, term()}
+  def run(%{"task" => task} = input, %Context{} = parent_ctx) do
+    model = Map.get(input, "model", parent_ctx.model)
+    extra_context = Map.get(input, "context", "")
+
+    user_input =
+      if extra_context != "" do
+        "<context>\n#{extra_context}\n</context>\n\n#{task}"
+      else
+        task
+      end
+
+    Logger.info("SubAgent: spawning for task=#{String.slice(task, 0..80)}")
+
+    {:ok, session} =
+      Session.start_link(
+        model: model,
+        project_root: parent_ctx.project_root
+      )
+
+    result =
+      try do
+        Conversation.run(
+          session: session,
+          model: model,
+          config: parent_ctx.config,
+          event_handler: &noop_event_handler/1,
+          permission_mode: parent_ctx.permission_mode,
+          project_root: parent_ctx.project_root,
+          provider_module: parent_ctx.provider_module,
+          user_input: user_input
+        )
+      after
+        GenServer.stop(session, :normal, 5_000)
+      end
+
+    case result do
+      {:ok, %{text: text, iterations: iterations}} ->
+        Logger.info(
+          "SubAgent: complete iterations=#{iterations} output_len=#{String.length(text)}"
+        )
+
+        {:ok, %{text: text, iterations: iterations}}
+
+      {:error, reason} ->
+        Logger.warning("SubAgent: failed reason=#{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp noop_event_handler(_event), do: :ok
+end

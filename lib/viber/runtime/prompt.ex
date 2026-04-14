@@ -19,10 +19,12 @@ defmodule Viber.Runtime.Prompt do
     config = Keyword.get(opts, :config)
     permission_mode = Keyword.get(opts, :permission_mode, :prompt)
     custom_instructions = Keyword.get(opts, :custom_instructions)
+    browser_context = Keyword.get(opts, :browser_context, %{})
 
     [
       role_section(),
       environment_section(project_root),
+      browser_context_section(browser_context),
       tool_instructions_section(),
       tools_section(),
       project_context_section(project_root),
@@ -69,6 +71,34 @@ defmodule Viber.Runtime.Prompt do
       else
         lines
       end
+
+    Enum.join(lines, "\n")
+  end
+
+  defp browser_context_section(ctx) when map_size(ctx) == 0, do: nil
+
+  defp browser_context_section(ctx) do
+    lines = ["# Browser Context"]
+
+    lines =
+      if Map.has_key?(ctx, "url"),
+        do: lines ++ [" - URL: #{ctx["url"]}"],
+        else: lines
+
+    lines =
+      if Map.has_key?(ctx, "title"),
+        do: lines ++ [" - Title: #{ctx["title"]}"],
+        else: lines
+
+    lines =
+      if Map.has_key?(ctx, "accessibility_tree"),
+        do: lines ++ [" - Accessibility Tree:\n#{ctx["accessibility_tree"]}"],
+        else: lines
+
+    lines =
+      if Map.has_key?(ctx, "focused_element"),
+        do: lines ++ [" - Focused Element: #{inspect(ctx["focused_element"])}"],
+        else: lines
 
     Enum.join(lines, "\n")
   end

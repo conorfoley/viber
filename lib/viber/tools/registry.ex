@@ -632,6 +632,36 @@ defmodule Viber.Tools.Registry do
       permission: :danger_full_access,
       permission_fn: &Builtins.Scheduler.permission_for/1,
       handler: &Builtins.Scheduler.execute/1
+    },
+    "spawn_agent" => %Spec{
+      name: "spawn_agent",
+      description: """
+      Spawn an isolated sub-agent to perform a task and return its response.
+      Multiple spawn_agent calls in the same turn run in parallel.
+      The sub-agent has full access to all tools and starts with a fresh conversation.
+      Use this to delegate independent work streams (e.g. run tests while editing code).
+      """,
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "task" => %{
+            "type" => "string",
+            "description" => "The task for the sub-agent to perform"
+          },
+          "context" => %{
+            "type" => "string",
+            "description" => "Optional extra context to inject before the task"
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional model override (defaults to parent model)"
+          }
+        },
+        "required" => ["task"],
+        "additionalProperties" => false
+      },
+      permission: :danger_full_access,
+      handler: nil
     }
   }
 
