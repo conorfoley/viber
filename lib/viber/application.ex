@@ -18,7 +18,8 @@ defmodule Viber.Application do
           {Task.Supervisor, name: Viber.TaskSupervisor},
           {Registry, keys: :unique, name: Viber.MCPRegistry},
           Viber.Tools.MCP.ServerManager
-        ] ++ scheduler_children() ++ gateway_children() ++ server_children() ++ hot_reload_children()
+        ] ++
+        scheduler_children() ++ gateway_children() ++ server_children() ++ hot_reload_children()
 
     opts = [strategy: :one_for_one, name: Viber.Supervisor]
     Supervisor.start_link(children, opts)

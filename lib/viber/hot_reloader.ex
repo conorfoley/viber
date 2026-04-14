@@ -110,12 +110,15 @@ defmodule Viber.HotReloader do
 
   @spec run_reload(String.t()) :: {:ok, [module()]} | {:error, String.t()}
   defp run_reload(project_root) do
+    ebin_dir = Path.join([project_root, "_build", "dev", "lib", "viber", "ebin"])
+    before_mtimes = beam_mtimes(ebin_dir)
+
     case System.cmd("mix", ["compile", "--no-deps-check"],
            cd: project_root,
            stderr_to_stdout: true
          ) do
       {_output, 0} ->
-        modules = load_beam_files(project_root)
+        modules = load_changed_beam_files(ebin_dir, before_mtimes)
         {:ok, modules}
 
       {output, _code} ->
@@ -123,26 +126,42 @@ defmodule Viber.HotReloader do
     end
   end
 
-  @spec load_beam_files(String.t()) :: [module()]
-  defp load_beam_files(project_root) do
-    ebin_dir = Path.join([project_root, "_build", "dev", "lib", "viber", "ebin"])
+  @spec beam_mtimes(String.t()) :: %{String.t() => integer()}
+  defp beam_mtimes(ebin_dir) do
+    ebin_dir
+    |> Path.join("*.beam")
+    |> Path.wildcard()
+    |> Map.new(fn path ->
+      mtime = path |> File.stat!() |> Map.get(:mtime)
+      {path, mtime}
+    end)
+  end
 
+  @spec load_changed_beam_files(String.t(), %{String.t() => integer()}) :: [module()]
+  defp load_changed_beam_files(ebin_dir, before_mtimes) do
     ebin_dir
     |> Path.join("*.beam")
     |> Path.wildcard()
     |> Enum.flat_map(fn beam_path ->
-      module =
-        beam_path
-        |> Path.basename(".beam")
-        |> String.to_atom()
+      current_mtime = beam_path |> File.stat!() |> Map.get(:mtime)
+      old_mtime = Map.get(before_mtimes, beam_path)
 
-      abs_path = beam_path |> Path.rootname() |> String.to_charlist()
+      if old_mtime != current_mtime do
+        module =
+          beam_path
+          |> Path.basename(".beam")
+          |> String.to_atom()
 
-      :code.purge(module)
+        abs_path = beam_path |> Path.rootname() |> String.to_charlist()
 
-      case :code.load_abs(abs_path) do
-        {:module, ^module} -> [module]
-        _ -> []
+        :code.purge(module)
+
+        case :code.load_abs(abs_path) do
+          {:module, ^module} -> [module]
+          _ -> []
+        end
+      else
+        []
       end
     end)
   end

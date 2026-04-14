@@ -144,7 +144,7 @@ defmodule Viber.Runtime.Conversation do
         "Conversation: executing #{length(tool_uses)} tool(s): #{Enum.map_join(tool_uses, ", ", fn {_id, name, _input} -> name end)}"
       )
 
-      tool_results = execute_tools(tool_uses, ctx)
+      {tool_results, ctx} = execute_tools(tool_uses, ctx)
 
       tool_result_blocks =
         Enum.map(tool_results, fn {id, name, output, is_error} ->
@@ -172,8 +172,8 @@ defmodule Viber.Runtime.Conversation do
         Permissions.register_tool(pol, spec.name, spec.permission)
       end)
 
-    decisions =
-      Enum.map(tool_uses, fn {id, name, input_map} ->
+    {decisions, newly_allowed} =
+      Enum.reduce(tool_uses, {[], MapSet.new()}, fn {id, name, input_map}, {acc, allowed_set} ->
         input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
         input = ensure_parsed_input(input_map)
 
@@ -187,22 +187,34 @@ defmodule Viber.Runtime.Conversation do
               base_policy
           end
 
+        already_allowed =
+          MapSet.member?(ctx.allowed_tools, name) or MapSet.member?(allowed_set, name)
+
         case Permissions.check(policy, name, input_str) do
           permission when permission in [:allow, :prompt] ->
-            allowed =
-              permission == :allow || Permissions.prompt_user(name, input_str)
-
-            if allowed do
-              {:run, id, name, input}
+            if permission == :allow or already_allowed do
+              {[{:run, id, name, input} | acc], allowed_set}
             else
-              reason = "tool '#{name}' denied by user"
-              {:denied, id, name, reason}
+              case Permissions.prompt_user(name, input_str) do
+                :yes ->
+                  {[{:run, id, name, input} | acc], allowed_set}
+
+                :always ->
+                  {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
+
+                :no ->
+                  reason = "tool '#{name}' denied by user"
+                  {[{:denied, id, name, reason} | acc], allowed_set}
+              end
             end
 
           {:deny, reason} ->
-            {:denied, id, name, reason}
+            {[{:denied, id, name, reason} | acc], allowed_set}
         end
       end)
+
+    decisions = Enum.reverse(decisions)
+    ctx = %{ctx | allowed_tools: MapSet.union(ctx.allowed_tools, newly_allowed)}
 
     stream_results =
       ctx.task_supervisor
@@ -245,17 +257,20 @@ defmodule Viber.Runtime.Conversation do
       )
       |> Enum.to_list()
 
-    Enum.zip(decisions, stream_results)
-    |> Enum.map(fn
-      {_, {:ok, result}} ->
-        result
+    results =
+      Enum.zip(decisions, stream_results)
+      |> Enum.map(fn
+        {_, {:ok, result}} ->
+          result
 
-      {{:run, id, name, _}, {:exit, reason}} ->
-        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+        {{:run, id, name, _}, {:exit, reason}} ->
+          {id, name, "Tool execution failed: #{inspect(reason)}", true}
 
-      {{:denied, id, name, _}, {:exit, reason}} ->
-        {id, name, "Tool execution failed: #{inspect(reason)}", true}
-    end)
+        {{:denied, id, name, _}, {:exit, reason}} ->
+          {id, name, "Tool execution failed: #{inspect(reason)}", true}
+      end)
+
+    {results, ctx}
   end
 
   defp parse_tool_input(input) when is_binary(input) do

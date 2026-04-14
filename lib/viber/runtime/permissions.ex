@@ -54,7 +54,7 @@ defmodule Viber.Runtime.Permissions do
     end
   end
 
-  @spec prompt_user(String.t(), String.t()) :: boolean()
+  @spec prompt_user(String.t(), String.t()) :: :yes | :no | :always
   def prompt_user(tool_name, tool_input) do
     width =
       case :io.columns() do
@@ -95,20 +95,55 @@ defmodule Viber.Runtime.Permissions do
     IO.write(["\n", box])
     IO.puts("")
 
-    answer =
-      IO.gets([
-        IO.ANSI.yellow(),
-        "  Allow? ",
-        IO.ANSI.bright(),
-        "[Y/n]",
-        IO.ANSI.reset(),
-        " "
-      ])
+    IO.write([
+      IO.ANSI.yellow(),
+      "  Allow? ",
+      IO.ANSI.bright(),
+      "[Y/n/a] ",
+      IO.ANSI.reset()
+    ])
+
+    char = read_single_char()
+
+    case char do
+      c when c in [?a, ?A] ->
+        IO.puts("always")
+        :always
+
+      c when c in [?n, ?N] ->
+        IO.puts("no")
+        :no
+
+      _ ->
+        IO.puts("yes")
+        :yes
+    end
+  end
+
+  defp read_single_char do
+    tty = File.open!("/dev/tty", [:read, :raw])
+    :os.cmd(~c"stty raw -echo < /dev/tty")
+
+    byte =
+      case IO.binread(tty, 1) do
+        <<c>> -> c
+        _ -> ?\n
+      end
+
+    :os.cmd(~c"stty -raw echo < /dev/tty")
+    File.close(tty)
+    byte
+  rescue
+    _ ->
+      IO.gets("")
       |> to_string()
       |> String.trim()
       |> String.downcase()
-
-    answer in ["y", "yes", ""]
+      |> case do
+        "a" -> ?a
+        "n" -> ?N
+        _ -> ?y
+      end
   end
 
   @spec mode_from_string(String.t()) :: permission_mode()

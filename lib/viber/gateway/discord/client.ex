@@ -43,7 +43,10 @@ defmodule Viber.Gateway.Discord.Client do
         :ok
 
       {:ok, %{status: status, body: body}} ->
-        Logger.warning("Discord send_channel_message failed status=#{status} body=#{inspect(body)}")
+        Logger.warning(
+          "Discord send_channel_message failed status=#{status} body=#{inspect(body)}"
+        )
+
         {:error, {status, body}}
 
       {:error, reason} ->
@@ -83,7 +86,10 @@ defmodule Viber.Gateway.Discord.Client do
         :ok
 
       {:ok, %{status: status, body: body}} ->
-        Logger.warning("Discord register_global_command failed status=#{status} body=#{inspect(body)}")
+        Logger.warning(
+          "Discord register_global_command failed status=#{status} body=#{inspect(body)}"
+        )
+
         {:error, {status, body}}
 
       {:error, reason} ->
