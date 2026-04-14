@@ -7,8 +7,14 @@ defmodule Viber.Server.Router do
 
   plug(Viber.Server.CORSPlug)
   plug(:match)
-  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
+  plug(Plug.Parsers,
+    parsers: [:json],
+    json_decoder: Jason,
+    body_reader: {Viber.Server.BodyReader, :read_body, []}
+  )
   plug(:dispatch)
+
+  forward("/gateway", to: Viber.Gateway.WebhookRouter)
 
   post "/sessions" do
     case Viber.Server.SessionHandler.create_session(conn.body_params) do
