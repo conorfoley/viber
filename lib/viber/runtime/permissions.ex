@@ -122,7 +122,7 @@ defmodule Viber.Runtime.Permissions do
 
   defp read_single_char do
     tty = File.open!("/dev/tty", [:read, :raw])
-    :os.cmd(~c"stty raw -echo < /dev/tty")
+    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"])
 
     byte =
       case IO.binread(tty, 1) do
@@ -130,7 +130,7 @@ defmodule Viber.Runtime.Permissions do
         _ -> ?\n
       end
 
-    :os.cmd(~c"stty -raw echo < /dev/tty")
+    System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
     File.close(tty)
     byte
   rescue
