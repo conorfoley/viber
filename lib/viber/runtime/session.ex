@@ -113,6 +113,22 @@ defmodule Viber.Runtime.Session do
     GenServer.call(server, {:replace_messages, messages})
   end
 
+  @spec undo_last_turn(GenServer.server()) :: {:ok, non_neg_integer()} | {:error, String.t()}
+  def undo_last_turn(server) do
+    GenServer.call(server, :undo_last_turn)
+  end
+
+  @spec get_last_user_message(GenServer.server()) :: {:ok, String.t()} | {:error, String.t()}
+  def get_last_user_message(server) do
+    GenServer.call(server, :get_last_user_message)
+  end
+
+  @spec pop_last_turn(GenServer.server()) ::
+          {:ok, String.t(), non_neg_integer()} | {:error, String.t()}
+  def pop_last_turn(server) do
+    GenServer.call(server, :pop_last_turn)
+  end
+
   @spec save(GenServer.server()) :: {:ok, String.t()} | {:error, term()}
   def save(server) do
     GenServer.call(server, :save)
@@ -200,6 +216,70 @@ defmodule Viber.Runtime.Session do
     usage = recompute_usage(messages)
     state = %{state | messages: Enum.reverse(messages), cumulative_usage: usage}
     {:reply, :ok, schedule_persist(state)}
+  end
+
+  @impl true
+  def handle_call(:undo_last_turn, _from, state) do
+    case Enum.find_index(state.messages, fn m -> m.role == :user end) do
+      nil ->
+        {:reply, {:error, "No user messages to undo"}, state}
+
+      idx ->
+        kept = Enum.drop(state.messages, idx + 1)
+        removed = idx + 1
+        usage = recompute_usage(kept)
+        new_state = %{state | messages: kept, cumulative_usage: usage}
+        {:reply, {:ok, removed}, schedule_persist(new_state)}
+    end
+  end
+
+  @impl true
+  def handle_call(:get_last_user_message, _from, state) do
+    result =
+      state.messages
+      |> Enum.find(fn m -> m.role == :user end)
+      |> case do
+        nil ->
+          {:error, "No user messages in history"}
+
+        msg ->
+          text =
+            Enum.find_value(msg.blocks, fn
+              {:text, t} -> t
+              _ -> nil
+            end)
+
+          if text, do: {:ok, text}, else: {:error, "Last user message has no text content"}
+      end
+
+    {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call(:pop_last_turn, _from, state) do
+    case Enum.find_index(state.messages, fn m -> m.role == :user end) do
+      nil ->
+        {:reply, {:error, "No user messages to undo"}, state}
+
+      idx ->
+        msg = Enum.at(state.messages, idx)
+
+        text =
+          Enum.find_value(msg.blocks, fn
+            {:text, t} -> t
+            _ -> nil
+          end)
+
+        if text == nil do
+          {:reply, {:error, "Last user message has no text content"}, state}
+        else
+          kept = Enum.drop(state.messages, idx + 1)
+          removed = idx + 1
+          usage = recompute_usage(kept)
+          new_state = %{state | messages: kept, cumulative_usage: usage}
+          {:reply, {:ok, text, removed}, schedule_persist(new_state)}
+        end
+    end
   end
 
   @impl true

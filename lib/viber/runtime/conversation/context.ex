@@ -11,7 +11,9 @@ defmodule Viber.Runtime.Conversation.Context do
           provider_module: module() | nil,
           task_supervisor: atom(),
           browser_context: map(),
-          allowed_tools: MapSet.t(String.t())
+          allowed_tools: MapSet.t(String.t()),
+          interrupt: :atomics.atomics_ref() | nil,
+          enabled_toolsets: [atom()] | nil
         }
 
   @enforce_keys [:session, :model, :event_handler]
@@ -21,6 +23,8 @@ defmodule Viber.Runtime.Conversation.Context do
     :config,
     :provider_module,
     :event_handler,
+    :interrupt,
+    :enabled_toolsets,
     permission_mode: :prompt,
     project_root: ".",
     task_supervisor: Viber.TaskSupervisor,

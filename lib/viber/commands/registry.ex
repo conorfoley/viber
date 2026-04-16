@@ -118,6 +118,38 @@ defmodule Viber.Commands.Registry do
       usage: "/databases [test <name>|remove <name>]",
       category: :config,
       handler: Handlers.Databases
+    },
+    %{
+      name: "undo",
+      aliases: [],
+      description: "Remove the last user turn and all subsequent messages from history",
+      usage: "/undo",
+      category: :session,
+      handler: Handlers.Undo
+    },
+    %{
+      name: "retry",
+      aliases: [],
+      description: "Undo the last turn and re-send the same input",
+      usage: "/retry",
+      category: :session,
+      handler: Handlers.Retry
+    },
+    %{
+      name: "toolset",
+      aliases: ["toolsets"],
+      description: "Show, enable, or disable tool groups",
+      usage: "/toolset [list|enable <name>|disable <name>|reset]",
+      category: :config,
+      handler: Handlers.Toolset
+    },
+    %{
+      name: "doctor",
+      aliases: [],
+      description: "Check environment, connectivity, and configuration",
+      usage: "/doctor",
+      category: :info,
+      handler: Handlers.Doctor
     }
   ]
 

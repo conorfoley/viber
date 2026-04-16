@@ -27,7 +27,7 @@ defmodule Viber.Tools.Builtins.MixTaskTest do
     assert {:ok, result} =
              MixTask.execute(%{
                "task" => "run",
-               "args" => ["--eval", "Process.sleep(10_000)"],
+               "args" => ["--no-start", "--eval", "Process.sleep(10_000)"],
                "timeout" => 1
              })
 

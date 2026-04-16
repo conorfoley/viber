@@ -8,6 +8,7 @@ defmodule Viber.Tools.Registry do
   @specs %{
     "bash" => %Spec{
       name: "bash",
+      toolset: :core,
       description: "Execute a shell command in the current workspace.",
       input_schema: %{
         "type" => "object",
@@ -28,6 +29,7 @@ defmodule Viber.Tools.Registry do
     },
     "read_file" => %Spec{
       name: "read_file",
+      toolset: :core,
       description: "Read a text file from the workspace.",
       input_schema: %{
         "type" => "object",
@@ -44,6 +46,7 @@ defmodule Viber.Tools.Registry do
     },
     "write_file" => %Spec{
       name: "write_file",
+      toolset: :core,
       description: "Write a text file in the workspace.",
       input_schema: %{
         "type" => "object",
@@ -59,6 +62,7 @@ defmodule Viber.Tools.Registry do
     },
     "edit_file" => %Spec{
       name: "edit_file",
+      toolset: :core,
       description: "Replace text in a workspace file.",
       input_schema: %{
         "type" => "object",
@@ -76,6 +80,7 @@ defmodule Viber.Tools.Registry do
     },
     "glob_search" => %Spec{
       name: "glob_search",
+      toolset: :core,
       description: "Find files by glob pattern.",
       input_schema: %{
         "type" => "object",
@@ -91,6 +96,7 @@ defmodule Viber.Tools.Registry do
     },
     "grep_search" => %Spec{
       name: "grep_search",
+      toolset: :core,
       description: "Search file contents with a regex pattern.",
       input_schema: %{
         "type" => "object",
@@ -117,6 +123,7 @@ defmodule Viber.Tools.Registry do
     },
     "ls" => %Spec{
       name: "ls",
+      toolset: :core,
       description: "List files and directories at a given path.",
       input_schema: %{
         "type" => "object",
@@ -133,6 +140,7 @@ defmodule Viber.Tools.Registry do
     },
     "web_fetch" => %Spec{
       name: "web_fetch",
+      toolset: :web,
       description: "Fetch a URL and convert it into readable text.",
       input_schema: %{
         "type" => "object",
@@ -148,6 +156,7 @@ defmodule Viber.Tools.Registry do
     },
     "multi_edit" => %Spec{
       name: "multi_edit",
+      toolset: :core,
       description:
         "Apply multiple text replacements across one or more files atomically. " <>
           "All edits are validated before any writes occur; if any edit fails, no files are modified.",
@@ -178,6 +187,7 @@ defmodule Viber.Tools.Registry do
     },
     "clipboard" => %Spec{
       name: "clipboard",
+      toolset: :system,
       description:
         "Read from or write to the system clipboard. " <>
           "Use action 'read' to get current clipboard contents, or 'write' with text to copy to clipboard.",
@@ -198,6 +208,7 @@ defmodule Viber.Tools.Registry do
     },
     "jq" => %Spec{
       name: "jq",
+      toolset: :system,
       description:
         "Run a jq filter against a JSON file or a raw JSON string. " <>
           "Provide either 'path' (path to a JSON file) or 'input' (a JSON string), not both.",
@@ -216,6 +227,7 @@ defmodule Viber.Tools.Registry do
     },
     "user_input" => %Spec{
       name: "user_input",
+      toolset: :system,
       description:
         "Ask the user a question and wait for their response. " <>
           "Use this to gather clarification or confirmation during a task. " <>
@@ -237,6 +249,7 @@ defmodule Viber.Tools.Registry do
     },
     "mix_task" => %Spec{
       name: "mix_task",
+      toolset: :coding,
       description:
         "Run an arbitrary Mix task with optional arguments and a configurable timeout.",
       input_schema: %{
@@ -258,6 +271,7 @@ defmodule Viber.Tools.Registry do
     },
     "test_runner" => %Spec{
       name: "test_runner",
+      toolset: :coding,
       description:
         "Run `mix test` with optional path/line targeting and return a parsed summary of results. " <>
           "Provides structured output with pass/fail status, test counts, and failure details.",
@@ -281,6 +295,7 @@ defmodule Viber.Tools.Registry do
     },
     "diagnostics" => %Spec{
       name: "diagnostics",
+      toolset: :coding,
       description:
         "Run static analysis (Dialyzer or Credo) and return structured findings. " <>
           "Use tool 'dialyzer' for type checking and 'credo' for code style/quality issues. " <>
@@ -299,6 +314,7 @@ defmodule Viber.Tools.Registry do
     },
     "git" => %Spec{
       name: "git",
+      toolset: :coding,
       description:
         "Run a git command in the current workspace. " <>
           "Provide a subcommand (e.g., 'status', 'log', 'diff', 'add', 'commit', 'checkout', 'stash') " <>
@@ -331,6 +347,7 @@ defmodule Viber.Tools.Registry do
     },
     "formatter" => %Spec{
       name: "formatter",
+      toolset: :coding,
       description:
         "Apply `mix format` to a file path or an inline Elixir code snippet. " <>
           "Provide 'path' to format a file on disk, or 'content' to format a code string and get back the formatted result. " <>
@@ -350,6 +367,7 @@ defmodule Viber.Tools.Registry do
     },
     "ecto_schema_inspector" => %Spec{
       name: "ecto_schema_inspector",
+      toolset: :database,
       description:
         "Parse an Ecto schema module and return its fields, types, associations, embeds, " <>
           "and changeset functions as structured output — without executing any SQL. " <>
@@ -375,6 +393,7 @@ defmodule Viber.Tools.Registry do
     },
     "mysql_query" => %Spec{
       name: "mysql_query",
+      toolset: :database,
       description:
         "Execute a SQL query against the active database connection (MySQL or PostgreSQL). " <>
           "Returns results as a formatted table, JSON, or CSV. " <>
@@ -422,6 +441,7 @@ defmodule Viber.Tools.Registry do
     },
     "mysql_schema" => %Spec{
       name: "mysql_schema",
+      toolset: :database,
       description:
         "Introspect database schema: list databases, tables, describe columns/indexes, " <>
           "show CREATE TABLE, explore foreign key relationships, and search columns by pattern.",
@@ -458,6 +478,7 @@ defmodule Viber.Tools.Registry do
     },
     "mysql_explain" => %Spec{
       name: "mysql_explain",
+      toolset: :database,
       description:
         "Run EXPLAIN or EXPLAIN ANALYZE on a SQL query to show the execution plan. " <>
           "Useful for understanding query performance and identifying optimization opportunities.",
@@ -479,6 +500,7 @@ defmodule Viber.Tools.Registry do
     },
     "data_export" => %Spec{
       name: "data_export",
+      toolset: :database,
       description:
         "Export SQL query results to a file. Supports CSV, JSON, and SQL INSERT formats. " <>
           "Provide table_name when using sql format to set the target table in INSERT statements.",
@@ -506,6 +528,7 @@ defmodule Viber.Tools.Registry do
     },
     "data_transform" => %Spec{
       name: "data_transform",
+      toolset: :database,
       description:
         "Run a SQL query then apply in-memory transformations: group (with aggregation), " <>
           "sort, filter, sample, select columns, rename columns, or pivot. " <>
@@ -565,6 +588,7 @@ defmodule Viber.Tools.Registry do
     },
     "scheduler" => %Spec{
       name: "scheduler",
+      toolset: :scheduling,
       description:
         "Manage scheduled cron jobs: create, list, update, delete, enable/disable, " <>
           "run immediately, and view execution history. " <>
@@ -635,6 +659,7 @@ defmodule Viber.Tools.Registry do
     },
     "spawn_agent" => %Spec{
       name: "spawn_agent",
+      toolset: :core,
       description: """
       Spawn an isolated sub-agent to perform a task and return its response.
       Multiple spawn_agent calls in the same turn run in parallel.
@@ -680,6 +705,12 @@ defmodule Viber.Tools.Registry do
 
   @spec builtin_specs() :: [Spec.t()]
   def builtin_specs, do: Map.values(@specs)
+
+  @spec builtin_specs_for_toolsets([atom()]) :: [Spec.t()]
+  def builtin_specs_for_toolsets(toolsets) do
+    toolset_set = MapSet.new(toolsets)
+    Enum.filter(builtin_specs(), fn spec -> MapSet.member?(toolset_set, spec.toolset) end)
+  end
 
   @spec all_specs() :: [Spec.t()]
   def all_specs, do: builtin_specs() ++ mcp_specs()

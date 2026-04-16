@@ -9,11 +9,20 @@ defmodule Viber.Tools.Spec do
           input_schema: map(),
           permission: Viber.Runtime.Permissions.permission_mode(),
           permission_fn: (map() -> Viber.Runtime.Permissions.permission_mode()) | nil,
-          handler: (map() -> {:ok, String.t()} | {:error, String.t()}) | nil
+          handler: (map() -> {:ok, String.t()} | {:error, String.t()}) | nil,
+          toolset: atom()
         }
 
   @enforce_keys [:name, :description, :input_schema, :permission]
-  defstruct [:name, :description, :input_schema, :permission, :permission_fn, :handler]
+  defstruct [
+    :name,
+    :description,
+    :input_schema,
+    :permission,
+    :permission_fn,
+    :handler,
+    toolset: :core
+  ]
 
   @spec effective_permission(t(), map()) :: Viber.Runtime.Permissions.permission_mode()
   def effective_permission(%__MODULE__{permission_fn: nil, permission: perm}, _input), do: perm

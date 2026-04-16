@@ -17,6 +17,7 @@ defmodule Viber.Runtime.Conversation do
           | {:thinking_delta, String.t()}
           | {:turn_complete, Usage.t()}
           | {:error, String.t()}
+          | {:interrupted, String.t()}
 
   @max_iterations 25
 
@@ -30,7 +31,9 @@ defmodule Viber.Runtime.Conversation do
       permission_mode: Keyword.get(opts, :permission_mode, :prompt),
       project_root: Keyword.get(opts, :project_root, File.cwd!()),
       provider_module: Keyword.get(opts, :provider_module),
-      browser_context: Keyword.get(opts, :browser_context, %{})
+      browser_context: Keyword.get(opts, :browser_context, %{}),
+      interrupt: Keyword.get(opts, :interrupt),
+      enabled_toolsets: Keyword.get(opts, :enabled_toolsets)
     }
 
     user_input = Keyword.fetch!(opts, :user_input)
@@ -47,7 +50,20 @@ defmodule Viber.Runtime.Conversation do
     {:error, :max_iterations}
   end
 
-  defp turn_loop(%Context{} = ctx, iteration) do
+  defp turn_loop(%Context{interrupt: interrupt, event_handler: handler} = ctx, iteration)
+       when interrupt != nil do
+    if :atomics.get(interrupt, 1) == 1 do
+      Logger.info("Conversation: interrupted by user at iteration #{iteration}")
+      handler.({:interrupted, "Interrupted"})
+      {:ok, :interrupted}
+    else
+      do_turn_loop(ctx, iteration)
+    end
+  end
+
+  defp turn_loop(%Context{} = ctx, iteration), do: do_turn_loop(ctx, iteration)
+
+  defp do_turn_loop(%Context{} = ctx, iteration) do
     messages = Session.get_messages(ctx.session)
 
     system_prompt =
@@ -64,6 +80,7 @@ defmodule Viber.Runtime.Conversation do
 
     tool_defs =
       Registry.builtin_specs()
+      |> filter_by_toolsets(ctx.enabled_toolsets)
       |> Enum.map(&Spec.to_tool_definition/1)
 
     api_messages = Enum.map(messages, &to_api_message/1)
@@ -162,13 +179,14 @@ defmodule Viber.Runtime.Conversation do
     permission_mode = ctx.permission_mode
     event_handler = ctx.event_handler
 
+    active_specs = Registry.builtin_specs() |> filter_by_toolsets(ctx.enabled_toolsets)
+
     specs_by_name =
-      Registry.builtin_specs()
+      active_specs
       |> Map.new(fn spec -> {spec.name, spec} end)
 
     base_policy =
-      Enum.reduce(Registry.builtin_specs(), Permissions.new_policy(permission_mode), fn spec,
-                                                                                        pol ->
+      Enum.reduce(active_specs, Permissions.new_policy(permission_mode), fn spec, pol ->
         Permissions.register_tool(pol, spec.name, spec.permission)
       end)
 
@@ -414,6 +432,14 @@ defmodule Viber.Runtime.Conversation do
       _ -> []
     end)
     |> Enum.join()
+  end
+
+  defp filter_by_toolsets(specs, nil), do: specs
+  defp filter_by_toolsets(specs, []), do: specs
+
+  defp filter_by_toolsets(specs, toolsets) do
+    toolset_set = MapSet.new(toolsets)
+    Enum.filter(specs, fn spec -> MapSet.member?(toolset_set, spec.toolset) end)
   end
 
   defp config_overrides(nil), do: []
