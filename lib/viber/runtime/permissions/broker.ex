@@ -181,6 +181,13 @@ defmodule Viber.Runtime.Permissions.Broker do
       timeout ->
         Logger.warning("Broker: permission request #{request_id} timed out after #{timeout}ms")
         GenServer.cast(server, {:cancel, request_id})
+
+        receive do
+          {:permission_decision, ^request_id, _} -> :ok
+        after
+          0 -> :ok
+        end
+
         :deny
     end
   end

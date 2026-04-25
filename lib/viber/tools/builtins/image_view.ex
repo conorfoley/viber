@@ -12,32 +12,42 @@ defmodule Viber.Tools.Builtins.ImageView do
 
     case validate_image(path) do
       :ok ->
-        stat = File.stat!(path)
-        ext = Path.extname(path) |> String.downcase()
-        mime = mime_type(ext)
+        case File.stat(path) do
+          {:ok, stat} ->
+            ext = Path.extname(path) |> String.downcase()
+            mime = mime_type(ext)
 
-        lines = [
-          "Image: #{path}",
-          "Size: #{format_size(stat.size)}",
-          "Type: #{mime}",
-          "Modified: #{NaiveDateTime.to_string(stat.mtime |> naive_from_erl())}"
-        ]
+            lines = [
+              "Image: #{path}",
+              "Size: #{format_size(stat.size)}",
+              "Type: #{mime}",
+              "Modified: #{NaiveDateTime.to_string(stat.mtime |> naive_from_erl())}"
+            ]
 
-        lines =
-          if include_data and stat.size <= @max_file_size do
-            {:ok, data} = File.read(path)
-            b64 = Base.encode64(data)
-            lines ++ ["", "Base64 (#{String.length(b64)} chars):", b64]
-          else
-            if include_data and stat.size > @max_file_size do
-              lines ++
-                ["", "(File too large to include inline, max #{format_size(@max_file_size)})"]
-            else
-              lines
-            end
-          end
+            lines =
+              if include_data and stat.size <= @max_file_size do
+                case File.read(path) do
+                  {:ok, data} ->
+                    b64 = Base.encode64(data)
+                    lines ++ ["", "Base64 (#{String.length(b64)} chars):", b64]
 
-        {:ok, Enum.join(lines, "\n")}
+                  {:error, reason} ->
+                    lines ++ ["", "(Failed to read file data: #{reason})"]
+                end
+              else
+                if include_data and stat.size > @max_file_size do
+                  lines ++
+                    ["", "(File too large to include inline, max #{format_size(@max_file_size)})"]
+                else
+                  lines
+                end
+              end
+
+            {:ok, Enum.join(lines, "\n")}
+
+          {:error, reason} ->
+            {:error, "Failed to read file metadata: #{reason}"}
+        end
 
       {:error, _} = err ->
         err

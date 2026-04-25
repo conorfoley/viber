@@ -59,15 +59,22 @@ defmodule Viber.Tools.Builtins.WebSearch do
   end
 
   defp decode_ddg_url(url) do
-    case URI.decode_www_form(url) do
-      "//duckduckgo.com/l/?uddg=" <> rest ->
-        rest
-        |> String.split("&", parts: 2)
-        |> List.first()
-        |> URI.decode_www_form()
+    try do
+      case URI.decode_www_form(url) do
+        "//duckduckgo.com/l/?uddg=" <> rest ->
+          encoded = rest |> String.split("&", parts: 2) |> List.first()
 
-      other ->
-        other
+          try do
+            URI.decode_www_form(encoded)
+          rescue
+            ArgumentError -> encoded
+          end
+
+        other ->
+          other
+      end
+    rescue
+      ArgumentError -> url
     end
   end
 

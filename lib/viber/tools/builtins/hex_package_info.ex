@@ -23,7 +23,8 @@ defmodule Viber.Tools.Builtins.HexPackageInfo do
   defp fetch_info(package) do
     case hex_get("/packages/#{URI.encode(package)}") do
       {:ok, data} ->
-        latest = get_in(data, ["releases", Access.at(0), "version"]) || "unknown"
+        releases = data["releases"] || []
+        latest = get_in(releases, [Access.at(0), "version"]) || "unknown"
         docs_url = data["docs_html_url"] || data["html_url"]
 
         meta = data["meta"] || %{}

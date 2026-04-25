@@ -141,9 +141,15 @@ defmodule Viber.Runtime.Event do
 
   defp wire_value(v), do: v
 
-  defp atomize_payload(map) do
-    Map.new(map, fn {k, v} -> {safe_atom(k), v} end)
+  defp atomize_payload(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {safe_atom(k), atomize_payload(v)} end)
   end
+
+  defp atomize_payload(list) when is_list(list) do
+    Enum.map(list, &atomize_payload/1)
+  end
+
+  defp atomize_payload(value), do: value
 
   defp safe_atom(k) when is_atom(k), do: k
 

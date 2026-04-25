@@ -11,7 +11,10 @@ defmodule Viber.Tools.Builtins.DocsLookup do
     case parse_module(module_str) do
       {:ok, module} ->
         if function do
-          lookup_function(module, String.to_atom(function), arity)
+          case safe_function_atom(function) do
+            {:ok, fun_atom} -> lookup_function(module, fun_atom, arity)
+            {:error, _} = err -> err
+          end
         else
           lookup_module(module)
         end
@@ -24,18 +27,28 @@ defmodule Viber.Tools.Builtins.DocsLookup do
   def execute(_), do: {:error, "Missing required parameter: module"}
 
   defp parse_module(str) do
-    module =
-      str
-      |> String.trim()
-      |> then(fn
-        ":" <> rest -> String.to_atom(rest)
-        name -> Module.concat([name])
-      end)
+    try do
+      module =
+        str
+        |> String.trim()
+        |> then(fn
+          ":" <> rest -> String.to_existing_atom(rest)
+          name -> Module.safe_concat([name])
+        end)
 
-    case Code.ensure_loaded(module) do
-      {:module, ^module} -> {:ok, module}
-      {:error, _} -> {:error, "Module #{str} not found or not loadable"}
+      case Code.ensure_loaded(module) do
+        {:module, ^module} -> {:ok, module}
+        {:error, _} -> {:error, "Module #{str} not found or not loadable"}
+      end
+    rescue
+      ArgumentError -> {:error, "Module #{str} does not exist"}
     end
+  end
+
+  defp safe_function_atom(name) do
+    {:ok, String.to_existing_atom(name)}
+  rescue
+    ArgumentError -> {:error, "Unknown function: #{name}"}
   end
 
   defp lookup_module(module) do

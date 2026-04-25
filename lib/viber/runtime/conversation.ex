@@ -267,7 +267,8 @@ defmodule Viber.Runtime.Conversation do
           decisions,
           &run_decision(&1, ctx, event_handler),
           ordered: true,
-          timeout: 300_000
+          timeout: 300_000,
+          on_timeout: :kill_task
         )
         |> Enum.zip(decisions)
         |> Enum.map(fn
@@ -310,15 +311,26 @@ defmodule Viber.Runtime.Conversation do
   defp run_decision({:run, id, name, input}, _ctx, event_handler) do
     event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
 
-    case Executor.execute(name, input) do
-      {:ok, output} ->
-        event_handler.(
-          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
-        )
+    try do
+      case Executor.execute(name, input) do
+        {:ok, output} ->
+          event_handler.(
+            Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
+          )
 
-        {id, name, output, false}
+          {id, name, output, false}
 
-      {:error, error} ->
+        {:error, error} ->
+          event_handler.(
+            Event.new(:tool_result, %{name: name, id: id, output: error, is_error: true})
+          )
+
+          {id, name, error, true}
+      end
+    rescue
+      e ->
+        error = "Tool execution crashed: #{Exception.message(e)}"
+
         event_handler.(
           Event.new(:tool_result, %{name: name, id: id, output: error, is_error: true})
         )
