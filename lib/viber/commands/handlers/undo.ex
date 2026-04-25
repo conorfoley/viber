@@ -11,9 +11,7 @@ defmodule Viber.Commands.Handlers.Undo do
   def execute(_args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       case Session.undo_last_turn(session) do
         {:ok, removed} ->
           {:ok, "Undid last turn (removed #{removed} message(s))."}
@@ -21,6 +19,8 @@ defmodule Viber.Commands.Handlers.Undo do
         {:error, reason} ->
           {:error, reason}
       end
+    else
+      {:error, "No active session"}
     end
   end
 end

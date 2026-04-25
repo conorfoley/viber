@@ -12,13 +12,13 @@ defmodule Viber.Commands.Handlers.Retry do
   def execute(_args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       case Session.pop_last_turn(session) do
         {:ok, last_input, _removed} -> {:retry, last_input}
         {:error, reason} -> {:error, reason}
       end
+    else
+      {:error, "No active session"}
     end
   end
 end

@@ -6,17 +6,22 @@ defmodule Viber.Runtime.Conversation do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Event, Permissions, Prompt, Session, SubAgent, Usage}
+  alias Viber.Runtime.{Compact, Event, Permissions, Prompt, Session, SubAgent, Usage}
   alias Viber.Runtime.Permissions.Broker
   alias Viber.Runtime.Conversation.{Context, Request, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
 
   @type event :: Event.t()
 
-  @max_iterations 25
+  @default_max_iterations 25
 
   @spec run(Request.t() | keyword() | map()) :: {:ok, term()} | {:error, term()}
   def run(%Request{} = req) do
+    max_iter =
+      req.max_iterations ||
+        config_max_iterations(req.config) ||
+        @default_max_iterations
+
     ctx = %Context{
       session: req.session,
       model: req.model,
@@ -27,7 +32,8 @@ defmodule Viber.Runtime.Conversation do
       provider_module: req.provider_module,
       browser_context: req.browser_context,
       interrupt: req.interrupt,
-      enabled_toolsets: req.enabled_toolsets
+      enabled_toolsets: req.enabled_toolsets,
+      max_iterations: max_iter
     }
 
     user_input = req.user_input
@@ -41,8 +47,9 @@ defmodule Viber.Runtime.Conversation do
 
   def run(opts) when is_list(opts) or is_map(opts), do: run(Request.new(opts))
 
-  defp turn_loop(%Context{event_handler: handler}, iteration) when iteration >= @max_iterations do
-    handler.(Event.new(:error, %{message: "Maximum iterations (#{@max_iterations}) exceeded"}))
+  defp turn_loop(%Context{event_handler: handler, max_iterations: max}, iteration)
+       when iteration >= max do
+    handler.(Event.new(:error, %{message: "Maximum iterations (#{max}) exceeded"}))
     {:error, :max_iterations}
   end
 
@@ -60,6 +67,7 @@ defmodule Viber.Runtime.Conversation do
   defp turn_loop(%Context{} = ctx, iteration), do: do_turn_loop(ctx, iteration)
 
   defp do_turn_loop(%Context{} = ctx, iteration) do
+    maybe_auto_compact(ctx)
     messages = Session.get_messages(ctx.session)
 
     system_prompt =
@@ -238,102 +246,91 @@ defmodule Viber.Runtime.Conversation do
     decisions = Enum.reverse(decisions)
     ctx = %{ctx | allowed_tools: MapSet.union(ctx.allowed_tools, newly_allowed)}
 
-    stream_results =
-      ctx.task_supervisor
-      |> Task.Supervisor.async_stream_nolink(
-        decisions,
-        fn
-          {:run, id, "spawn_agent", input} ->
-            event_handler.(Event.new(:tool_use_start, %{name: "spawn_agent", id: id}))
+    run_sequential? =
+      Enum.any?(decisions, fn
+        {:run, _id, name, _input} ->
+          case Map.get(specs_by_name, name) do
+            %Spec{concurrent: false} -> true
+            _ -> false
+          end
 
-            case SubAgent.run(input, ctx) do
-              {:ok, %{text: text}} ->
-                event_handler.(
-                  Event.new(:tool_result, %{
-                    name: "spawn_agent",
-                    id: id,
-                    output: text,
-                    is_error: false
-                  })
-                )
-
-                {id, "spawn_agent", text, false}
-
-              {:error, reason} ->
-                msg = "Sub-agent failed: #{inspect(reason)}"
-
-                event_handler.(
-                  Event.new(:tool_result, %{
-                    name: "spawn_agent",
-                    id: id,
-                    output: msg,
-                    is_error: true
-                  })
-                )
-
-                {id, "spawn_agent", msg, true}
-            end
-
-          {:run, id, name, input} ->
-            event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
-
-            case Executor.execute(name, input) do
-              {:ok, output} ->
-                event_handler.(
-                  Event.new(:tool_result, %{
-                    name: name,
-                    id: id,
-                    output: output,
-                    is_error: false
-                  })
-                )
-
-                {id, name, output, false}
-
-              {:error, error} ->
-                event_handler.(
-                  Event.new(:tool_result, %{
-                    name: name,
-                    id: id,
-                    output: error,
-                    is_error: true
-                  })
-                )
-
-                {id, name, error, true}
-            end
-
-          {:denied, id, name, reason} ->
-            event_handler.(
-              Event.new(:tool_result, %{
-                name: name,
-                id: id,
-                output: reason,
-                is_error: true
-              })
-            )
-
-            {id, name, reason, true}
-        end,
-        ordered: true,
-        timeout: 300_000
-      )
-      |> Enum.to_list()
-
-    results =
-      Enum.zip(decisions, stream_results)
-      |> Enum.map(fn
-        {_, {:ok, result}} ->
-          result
-
-        {{:run, id, name, _}, {:exit, reason}} ->
-          {id, name, "Tool execution failed: #{inspect(reason)}", true}
-
-        {{:denied, id, name, _}, {:exit, reason}} ->
-          {id, name, "Tool execution failed: #{inspect(reason)}", true}
+        _ ->
+          false
       end)
 
+    results =
+      if run_sequential? do
+        Enum.map(decisions, &run_decision(&1, ctx, event_handler))
+      else
+        ctx.task_supervisor
+        |> Task.Supervisor.async_stream_nolink(
+          decisions,
+          &run_decision(&1, ctx, event_handler),
+          ordered: true,
+          timeout: 300_000
+        )
+        |> Enum.zip(decisions)
+        |> Enum.map(fn
+          {{:ok, result}, _} ->
+            result
+
+          {{:exit, reason}, {:run, id, name, _}} ->
+            {id, name, "Tool execution failed: #{inspect(reason)}", true}
+
+          {{:exit, reason}, {:denied, id, name, _}} ->
+            {id, name, "Tool execution failed: #{inspect(reason)}", true}
+        end)
+      end
+
     {results, ctx}
+  end
+
+  defp run_decision({:run, id, "spawn_agent", input}, ctx, event_handler) do
+    event_handler.(Event.new(:tool_use_start, %{name: "spawn_agent", id: id}))
+
+    case SubAgent.run(input, ctx) do
+      {:ok, %{text: text}} ->
+        event_handler.(
+          Event.new(:tool_result, %{name: "spawn_agent", id: id, output: text, is_error: false})
+        )
+
+        {id, "spawn_agent", text, false}
+
+      {:error, reason} ->
+        msg = "Sub-agent failed: #{inspect(reason)}"
+
+        event_handler.(
+          Event.new(:tool_result, %{name: "spawn_agent", id: id, output: msg, is_error: true})
+        )
+
+        {id, "spawn_agent", msg, true}
+    end
+  end
+
+  defp run_decision({:run, id, name, input}, _ctx, event_handler) do
+    event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
+
+    case Executor.execute(name, input) do
+      {:ok, output} ->
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
+        )
+
+        {id, name, output, false}
+
+      {:error, error} ->
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: error, is_error: true})
+        )
+
+        {id, name, error, true}
+    end
+  end
+
+  defp run_decision({:denied, id, name, reason}, _ctx, event_handler) do
+    event_handler.(Event.new(:tool_result, %{name: name, id: id, output: reason, is_error: true}))
+
+    {id, name, reason, true}
   end
 
   defp parse_tool_input(input) when is_binary(input) do
@@ -512,4 +509,21 @@ defmodule Viber.Runtime.Conversation do
   end
 
   defp config_overrides(_), do: []
+
+  defp config_max_iterations(%Viber.Runtime.Config{max_iterations: val}) when is_integer(val),
+    do: val
+
+  defp config_max_iterations(_), do: nil
+
+  @auto_compact_threshold 80_000
+
+  defp maybe_auto_compact(%Context{session: session, model: model, event_handler: handler}) do
+    if Compact.should_compact?(session, token_threshold: @auto_compact_threshold) do
+      Logger.info("Conversation: auto-compacting (token threshold exceeded)")
+      handler.(Event.new(:info, %{message: "Auto-compacting conversation history..."}))
+
+      {:ok, removed} = Compact.compact(session, model: model)
+      Logger.info("Conversation: auto-compacted #{removed} messages")
+    end
+  end
 end

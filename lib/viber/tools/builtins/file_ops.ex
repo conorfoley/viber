@@ -22,7 +22,7 @@ defmodule Viber.Tools.Builtins.FileOps do
           lines
           |> Enum.slice(start_idx, end_idx - start_idx)
           |> Enum.with_index(start_idx + 1)
-          |> Enum.map(fn {line, num} ->
+          |> Enum.map_join("\n", fn {line, num} ->
             truncated =
               if String.length(line) > @max_line_length,
                 do: String.slice(line, 0, @max_line_length) <> "...",
@@ -30,7 +30,6 @@ defmodule Viber.Tools.Builtins.FileOps do
 
             "#{String.pad_leading(Integer.to_string(num), 6)}\t#{truncated}"
           end)
-          |> Enum.join("\n")
 
         {:ok, "Lines #{start_idx + 1}-#{end_idx} of #{total} from #{path}:\n#{selected}"}
 

@@ -79,14 +79,29 @@ defmodule Viber.API.Client do
     end
   end
 
+  @model_max_tokens %{
+    "claude-opus-4-6" => 32_000,
+    "claude-sonnet-4-6" => 64_000,
+    "claude-haiku-4-5-20251213" => 64_000,
+    "gpt-4o" => 16_384,
+    "gpt-4.1" => 32_768,
+    "o3" => 100_000,
+    "o3-mini" => 65_536,
+    "o4-mini" => 100_000,
+    "grok-3" => 131_072,
+    "grok-3-mini" => 131_072
+  }
+
   @spec max_tokens_for_model(String.t()) :: pos_integer() | nil
   def max_tokens_for_model(model) do
     canonical = resolve_model_alias(model)
 
     cond do
-      String.starts_with?(canonical, "ollama:") -> nil
-      String.contains?(canonical, "opus") -> 32_000
-      true -> 64_000
+      String.starts_with?(canonical, "ollama:") ->
+        nil
+
+      true ->
+        Map.get(@model_max_tokens, canonical, 64_000)
     end
   end
 

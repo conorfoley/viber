@@ -73,10 +73,20 @@ defmodule Viber.API.ClientTest do
     assert Client.max_tokens_for_model("mistral") == nil
   end
 
-  test "max_tokens_for_model returns 32k for opus, 64k otherwise" do
+  test "max_tokens_for_model returns correct limits per model" do
     assert Client.max_tokens_for_model("opus") == 32_000
     assert Client.max_tokens_for_model("sonnet") == 64_000
-    assert Client.max_tokens_for_model("grok-3") == 64_000
+    assert Client.max_tokens_for_model("haiku") == 64_000
+    assert Client.max_tokens_for_model("gpt4o") == 16_384
+    assert Client.max_tokens_for_model("gpt41") == 32_768
+    assert Client.max_tokens_for_model("o3") == 100_000
+    assert Client.max_tokens_for_model("o4-mini") == 100_000
+    assert Client.max_tokens_for_model("grok") == 131_072
+    assert Client.max_tokens_for_model("grok-mini") == 131_072
+  end
+
+  test "max_tokens_for_model falls back to 64k for unknown non-ollama models" do
+    assert Client.max_tokens_for_model("some-future-model") == 64_000
   end
 
   test "from_model returns provider kind and module" do

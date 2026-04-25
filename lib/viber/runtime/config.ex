@@ -23,6 +23,7 @@ defmodule Viber.Runtime.Config do
           base_url: String.t() | nil,
           api_key: String.t() | nil,
           permission_mode: atom() | nil,
+          max_iterations: pos_integer() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
           custom_instructions: String.t() | nil,
@@ -34,6 +35,7 @@ defmodule Viber.Runtime.Config do
             base_url: nil,
             api_key: nil,
             permission_mode: nil,
+            max_iterations: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
             custom_instructions: nil,
@@ -67,6 +69,7 @@ defmodule Viber.Runtime.Config do
       base_url: override.base_url || base.base_url,
       api_key: override.api_key || base.api_key,
       permission_mode: override.permission_mode || base.permission_mode,
+      max_iterations: override.max_iterations || base.max_iterations,
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
       hooks: %{
         pre_tool_use: base.hooks.pre_tool_use ++ override.hooks.pre_tool_use,
@@ -112,6 +115,7 @@ defmodule Viber.Runtime.Config do
       ["baseUrl"] -> config.base_url
       ["permissionMode"] -> config.permission_mode
       ["customInstructions"] -> config.custom_instructions
+      ["maxIterations"] -> config.max_iterations
       ["mcpServers"] -> config.mcp_servers
       ["mcpServers", name] -> Map.get(config.mcp_servers, name)
       ["hooks"] -> config.hooks
@@ -150,6 +154,7 @@ defmodule Viber.Runtime.Config do
       base_url: data["baseUrl"],
       api_key: data["apiKey"],
       permission_mode: parse_permission_mode(data["permissions"]),
+      max_iterations: parse_max_iterations(data["maxIterations"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),
       custom_instructions: data["customInstructions"],
@@ -200,4 +205,7 @@ defmodule Viber.Runtime.Config do
   end
 
   defp parse_hooks(_), do: %{pre_tool_use: [], post_tool_use: []}
+
+  defp parse_max_iterations(val) when is_integer(val) and val > 0, do: val
+  defp parse_max_iterations(_), do: nil
 end

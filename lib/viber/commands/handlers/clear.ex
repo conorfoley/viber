@@ -11,11 +11,11 @@ defmodule Viber.Commands.Handlers.Clear do
   def execute(_args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       :ok = Session.clear(session)
       {:ok, "Session cleared."}
+    else
+      {:error, "No active session"}
     end
   end
 end

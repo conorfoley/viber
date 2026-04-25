@@ -32,7 +32,7 @@ defmodule Viber.Server.Interrupts do
 
   @doc """
   Signal the current in-flight turn for `session_id` to interrupt.
-  Returns `:ok` even if no interrupt ref is registered.
+  Returns `:ok` on success, or `{:error, :not_found}` if no ref is registered.
   """
   @spec signal(String.t()) :: :ok | {:error, :not_found}
   def signal(session_id) do

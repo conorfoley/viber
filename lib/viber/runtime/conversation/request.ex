@@ -26,7 +26,8 @@ defmodule Viber.Runtime.Conversation.Request do
           provider_module: module() | nil,
           browser_context: BrowserContext.t() | nil,
           interrupt: :atomics.atomics_ref() | nil,
-          enabled_toolsets: [atom()] | nil
+          enabled_toolsets: [atom()] | nil,
+          max_iterations: pos_integer() | nil
         }
 
   @enforce_keys [:session, :model, :user_input]
@@ -39,6 +40,7 @@ defmodule Viber.Runtime.Conversation.Request do
     :interrupt,
     :enabled_toolsets,
     :browser_context,
+    :max_iterations,
     event_handler: &__MODULE__.__noop_handler__/1,
     permission_mode: :prompt,
     project_root: "."
@@ -77,7 +79,8 @@ defmodule Viber.Runtime.Conversation.Request do
       provider_module: Map.get(opts, :provider_module),
       browser_context: BrowserContext.new(Map.get(opts, :browser_context)),
       interrupt: Map.get(opts, :interrupt),
-      enabled_toolsets: Map.get(opts, :enabled_toolsets)
+      enabled_toolsets: Map.get(opts, :enabled_toolsets),
+      max_iterations: Map.get(opts, :max_iterations)
     }
   end
 

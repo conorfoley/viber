@@ -151,16 +151,27 @@ defmodule Viber.Runtime.Prompt do
       Path.join([project_root, ".viber", "instructions.md"])
     ]
 
-    contents =
-      Enum.flat_map(candidates, fn path ->
+    readable =
+      Enum.filter(candidates, fn path ->
         case File.read(path) do
-          {:ok, content} when content != "" ->
-            trimmed = String.trim(content)
-            if trimmed != "", do: ["## #{Path.basename(path)}\n#{trimmed}"], else: []
-
-          _ ->
-            []
+          {:ok, content} when content != "" -> String.trim(content) != ""
+          _ -> false
         end
+      end)
+
+    viber_present = Enum.any?(readable, &(Path.basename(&1) == "VIBER.md"))
+
+    deduped =
+      if viber_present do
+        Enum.reject(readable, &(Path.basename(&1) == "AGENTS.md"))
+      else
+        readable
+      end
+
+    contents =
+      Enum.map(deduped, fn path ->
+        {:ok, content} = File.read(path)
+        "## #{Path.basename(path)}\n#{String.trim(content)}"
       end)
 
     if contents == [] do

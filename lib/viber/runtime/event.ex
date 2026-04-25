@@ -40,6 +40,8 @@ defmodule Viber.Runtime.Event do
 
   @wire_version 1
 
+  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result info)
+
   @type type ::
           :text_delta
           | :thinking_delta
@@ -55,6 +57,7 @@ defmodule Viber.Runtime.Event do
           | :model_changed
           | :session_cleared
           | :command_result
+          | :info
 
   @type t :: %__MODULE__{
           type: type(),
@@ -162,7 +165,6 @@ defmodule Viber.Runtime.Event do
     end
   end
 
-  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result)
   defp parse_type(str) when str in @known_types, do: {:ok, String.to_atom(str)}
   defp parse_type(_), do: {:error, :unknown_event_type}
 
@@ -213,7 +215,8 @@ defmodule Viber.Runtime.Event do
           "name" => "string",
           "text" => "string | null",
           "state_patch" => "object"
-        }
+        },
+        "info" => %{"message" => "string"}
       },
       "usage_map" => %{
         "input_tokens" => "integer",

@@ -7,7 +7,7 @@ An AI-powered coding assistant built in Elixir. Viber provides an interactive CL
 - **Multi-provider LLM support** — Anthropic Claude and OpenAI-compatible APIs (OpenAI, xAI Grok, Ollama) with streaming responses and model alias resolution
 - **Interactive REPL** — Terminal-based chat with rich Markdown rendering, persistent history, slash commands, and session save/resume
 - **Sub-agents** — Spawn isolated parallel agents from within a conversation; each inherits the parent's model, config, and permissions but starts with a fresh session. Sub-agent tool activity streams inline to the terminal with visual indentation
-- **30+ built-in tools** — File operations, shell execution, grep/glob search, git, test runner, code formatter, static analysis (Dialyzer/Credo), clipboard, `jq`, Ecto schema inspector, and more
+- **34 built-in tools** — File operations, shell execution, grep/glob search, git, test runner, code formatter, static analysis (Dialyzer/Credo), clipboard, `jq`, Ecto schema inspector, web search, Hex package lookup, inline docs, image viewer, and more
 - **Database tooling** — Named MySQL/PostgreSQL connections; run queries, inspect schemas, explain plans, export data (CSV/JSON/SQL), and transform results in-memory
 - **Scheduled jobs** — Quantum-based cron scheduler for SQL queries, shell scripts, and health checks with alerting (Slack webhook, file, log)
 - **Permission system** — Five-tier model (`:read_only` → `:workspace_write` → `:danger_full_access`, plus `:prompt` and `:allow`) with per-tool dynamic permission functions and an "always allow" option
@@ -44,16 +44,24 @@ mix escript.build
 
 ## Configuration
 
-Run `/init` in the REPL to scaffold a `.viber.json` in your project root, or create one manually:
+Config files are loaded and merged in order: user → project → local.
+
+| File | Purpose |
+|---|---|
+| `~/.config/viber/settings.json` | User-level defaults |
+| `.viber/settings.json` | Project-level config (commit this) |
+| `.viber/settings.local.json` | Local overrides (gitignore this) |
+
+Run `/init` in the REPL to scaffold a `.viber/settings.json` in your project root, or create one manually:
 
 ```json
 {
   "model": "sonnet",
-  "permission_mode": "prompt"
+  "permissions": "prompt"
 }
 ```
 
-Environment variables take precedence over the config file:
+Environment variables take precedence over config files:
 
 | Variable | Description |
 |---|---|
@@ -74,7 +82,7 @@ Start with `mix viber`. Type naturally to chat with the LLM. Use `@path/to/file`
 
 | Command | Description |
 |---|---|
-| `/help` | Show available commands |
+| `/help` | Show available slash commands |
 | `/model [name]` | Switch LLM model |
 | `/compact` | Summarise and compact conversation history |
 | `/config` | View or update configuration |
@@ -85,13 +93,13 @@ Start with `mix viber`. Type naturally to chat with the LLM. Use `@path/to/file`
 | `/connect` | Connect to a database |
 | `/databases` | List active database connections |
 | `/apikey [key]` | Set API key for the current session |
-| `/resume [id]` | Resume a previous session |
-| `/retry` | Retry the last user message |
+| `/resume [id]` | List recent sessions, resume a conversation, or purge old sessions |
+| `/retry` | Undo the last turn and re-send the same input |
 | `/undo` | Remove the last conversation turn |
-| `/reload` | Reload project configuration |
-| `/init` | Scaffold a `.viber.json` config |
-| `/bug` | Open a pre-filled bug report |
-| `/doctor` | Diagnose common configuration issues |
+| `/reload` | Recompile and hot-reload Viber source modules |
+| `/init` | Scaffold a `.viber/settings.json` config |
+| `/bug` | Generate a bug report template |
+| `/doctor` | Check environment, connectivity, and configuration |
 
 ### Model Aliases
 
@@ -104,9 +112,14 @@ Short aliases resolve to full model names:
 | `haiku` | claude-haiku-4-5-20251213 |
 | `gpt4o` | gpt-4o |
 | `gpt41` | gpt-4.1 |
-| `o3`, `o4-mini` | OpenAI reasoning models |
-| `grok`, `grok-mini` | xAI Grok 3 |
-| `llama3`, `mistral`, `phi4`, … | Ollama local models |
+| `o3` | o3 |
+| `o3-mini` | o3-mini |
+| `o4-mini` | o4-mini |
+| `grok` | grok-3 |
+| `grok-mini` | grok-3-mini |
+| `llama3`, `llama3.1`, `llama3.2` | Ollama Llama 3 variants |
+| `mistral`, `codestral` | Ollama Mistral models |
+| `qwen2.5`, `phi4`, `gemma3`, `deepseek-r1` | Other Ollama local models |
 
 ### Sub-agents
 
@@ -144,7 +157,7 @@ mix format                           # Format code
 mix format --check-formatted         # Check formatting (CI)
 mix dialyzer                         # Static type analysis
 mix credo                            # Code quality checks
-mix test --include live              # Run live integration tests (requires API keys)
+mix test.live                        # Run live integration tests (requires API keys)
 ```
 
 ## Architecture
@@ -159,7 +172,7 @@ Viber is organised into eight domains under `lib/viber/`:
 - **Runtime** — Session GenServer, conversation turn loop, sub-agent runner, system prompt builder, permission broker, config, usage tracking, compaction, session persistence
 - **Scheduler** — Quantum-based cron job engine with alert sink integration
 - **Server** — Bandit/Plug HTTP server, SSE streaming, session handler
-- **Tools** — `Spec` struct with static and dynamic permissions, registry, executor, 30+ built-in tools, MCP client/server
+- **Tools** — `Spec` struct with static and dynamic permissions, registry, executor, 34 built-in tools, MCP client/server
 
 See [VIBER.md](VIBER.md) for detailed architecture, conventions, and key file references.
 

@@ -11,14 +11,14 @@ defmodule Viber.Commands.Handlers.Compact do
   def execute(_args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       before_count = length(Session.get_messages(session))
 
       {:ok, removed} = Compact.compact(session)
       after_count = length(Session.get_messages(session))
       {:ok, "Compacted: #{before_count} → #{after_count} messages (#{removed} removed)"}
+    else
+      {:error, "No active session"}
     end
   end
 end

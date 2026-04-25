@@ -54,9 +54,7 @@ defmodule Viber.Runtime.FileRefs do
       end)
 
     combined =
-      successes
-      |> Enum.map(fn {:ok, path, content} -> format_block(path, content) end)
-      |> Enum.join("\n\n")
+      Enum.map_join(successes, "\n\n", fn {:ok, path, content} -> format_block(path, content) end)
 
     errors =
       Enum.map(failures, fn {:error, pattern, reason} ->

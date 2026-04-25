@@ -15,9 +15,7 @@ defmodule Viber.Commands.Handlers.Attach do
   def execute(args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       project_root = context[:project_root] || File.cwd!()
 
       results =
@@ -47,6 +45,8 @@ defmodule Viber.Commands.Handlers.Attach do
           {:ok, summary <> "\n" <> Enum.join(errors, "\n")}
         end
       end
+    else
+      {:error, "No active session"}
     end
   end
 end

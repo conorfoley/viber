@@ -266,13 +266,11 @@ defmodule Viber.API.Providers.OpenAICompat do
       Enum.flat_map(content, fn
         %{type: "tool_result", tool_use_id: tool_use_id, content: tc_content} = block ->
           text =
-            tc_content
-            |> Enum.map(fn
+            Enum.map_join(tc_content, "\n", fn
               %{type: "text", text: t} -> t
               %{type: "json", value: v} -> Jason.encode!(v)
               _ -> ""
             end)
-            |> Enum.join("\n")
 
           msg = %{role: "tool", tool_call_id: tool_use_id, content: text}
           msg = if Map.get(block, :is_error, false), do: Map.put(msg, :is_error, true), else: msg

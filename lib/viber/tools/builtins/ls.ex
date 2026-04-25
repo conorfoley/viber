@@ -29,7 +29,7 @@ defmodule Viber.Tools.Builtins.LS do
           entries
           |> Enum.sort()
           |> Enum.reject(fn entry -> ignored?(entry, ignore) end)
-          |> Enum.map(fn entry ->
+          |> Enum.map_join("\n", fn entry ->
             full_path = Path.join(dir, entry)
             prefix = String.duplicate("  ", depth)
 
@@ -40,7 +40,6 @@ defmodule Viber.Tools.Builtins.LS do
               "#{prefix}#{entry}"
             end
           end)
-          |> Enum.join("\n")
 
         {:error, reason} ->
           "Error listing #{dir}: #{inspect(reason)}"

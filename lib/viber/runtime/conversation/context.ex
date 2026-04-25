@@ -13,7 +13,8 @@ defmodule Viber.Runtime.Conversation.Context do
           browser_context: Viber.Runtime.BrowserContext.t() | nil,
           allowed_tools: MapSet.t(String.t()),
           interrupt: :atomics.atomics_ref() | nil,
-          enabled_toolsets: [atom()] | nil
+          enabled_toolsets: [atom()] | nil,
+          max_iterations: pos_integer()
         }
 
   @enforce_keys [:session, :model, :event_handler]
@@ -29,6 +30,7 @@ defmodule Viber.Runtime.Conversation.Context do
     project_root: ".",
     task_supervisor: Viber.TaskSupervisor,
     browser_context: nil,
-    allowed_tools: MapSet.new()
+    allowed_tools: MapSet.new(),
+    max_iterations: 25
   ]
 end

@@ -112,9 +112,7 @@ defmodule Viber.Tools.Builtins.DataTransform do
        ) do
     group_col = input["group_column"]
 
-    unless group_col do
-      {:error, "pivot requires group_column, pivot_column, and value_column"}
-    else
+    if group_col do
       pivot_values = rows |> Enum.map(&Map.get(&1, pivot_col)) |> Enum.uniq() |> Enum.sort()
 
       pivoted =
@@ -132,6 +130,8 @@ defmodule Viber.Tools.Builtins.DataTransform do
 
       all_cols = [group_col | Enum.map(pivot_values, &to_display/1)]
       {:ok, format_maps_ordered(pivoted, all_cols)}
+    else
+      {:error, "pivot requires group_column, pivot_column, and value_column"}
     end
   end
 

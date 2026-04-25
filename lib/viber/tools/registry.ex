@@ -25,6 +25,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :danger_full_access,
+      concurrent: false,
       handler: &Builtins.Bash.execute/1
     },
     "read_file" => %Spec{
@@ -58,6 +59,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       handler: &Builtins.FileOps.write/1
     },
     "edit_file" => %Spec{
@@ -76,6 +78,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       handler: &Builtins.FileOps.edit/1
     },
     "glob_search" => %Spec{
@@ -150,7 +153,7 @@ defmodule Viber.Tools.Registry do
         "required" => ["url"],
         "additionalProperties" => false
       },
-      permission: :workspace_write,
+      permission: :read_only,
       permission_fn: &Builtins.WebFetch.permission_for/1,
       handler: &Builtins.WebFetch.execute/1
     },
@@ -183,6 +186,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       handler: &Builtins.MultiEdit.execute/1
     },
     "clipboard" => %Spec{
@@ -267,6 +271,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :danger_full_access,
+      concurrent: false,
       handler: &Builtins.MixTask.execute/1
     },
     "test_runner" => %Spec{
@@ -342,6 +347,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       permission_fn: &Builtins.Git.permission_for/1,
       handler: &Builtins.Git.execute/1
     },
@@ -363,6 +369,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       handler: &Builtins.Formatter.execute/1
     },
     "ecto_schema_inspector" => %Spec{
@@ -524,6 +531,7 @@ defmodule Viber.Tools.Registry do
         "additionalProperties" => false
       },
       permission: :workspace_write,
+      concurrent: false,
       handler: &Builtins.DataExport.execute/1
     },
     "data_transform" => %Spec{
@@ -687,6 +695,106 @@ defmodule Viber.Tools.Registry do
       },
       permission: :danger_full_access,
       handler: nil
+    },
+    "web_search" => %Spec{
+      name: "web_search",
+      toolset: :web,
+      description:
+        "Search the web using a text query and return a list of results with titles, URLs, and snippets.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "The search query string"},
+          "max_results" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 20,
+            "description" => "Maximum number of results to return (default: 10)"
+          }
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.WebSearch.execute/1
+    },
+    "hex_package_info" => %Spec{
+      name: "hex_package_info",
+      toolset: :coding,
+      description:
+        "Look up Elixir/Erlang package information from Hex.pm. " <>
+          "Actions: 'info' (default) for package overview, 'versions' to list releases, " <>
+          "'deps' to show dependencies for a specific version.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "package" => %{"type" => "string", "description" => "Package name on Hex.pm"},
+          "action" => %{
+            "type" => "string",
+            "enum" => ["info", "versions", "deps"],
+            "description" => "What to look up (default: info)"
+          },
+          "version" => %{
+            "type" => "string",
+            "description" => "Specific version (for deps action, defaults to latest)"
+          }
+        },
+        "required" => ["package"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.HexPackageInfo.execute/1
+    },
+    "docs_lookup" => %Spec{
+      name: "docs_lookup",
+      toolset: :coding,
+      description:
+        "Look up Elixir module or function documentation, typespecs, and signatures " <>
+          "from loaded modules without a network round-trip. " <>
+          "Provide 'module' (e.g. \"Enum\") and optionally 'function' and 'arity'.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "module" => %{
+            "type" => "string",
+            "description" => "Module name, e.g. \"Enum\" or \"Phoenix.Controller\""
+          },
+          "function" => %{
+            "type" => "string",
+            "description" => "Function name to look up within the module"
+          },
+          "arity" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "description" => "Function arity to narrow results"
+          }
+        },
+        "required" => ["module"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.DocsLookup.execute/1
+    },
+    "image_view" => %Spec{
+      name: "image_view",
+      toolset: :core,
+      description:
+        "View image file metadata (size, type, dimensions) and optionally encode the image " <>
+          "as base64. Supports PNG, JPEG, GIF, WebP, BMP, and SVG.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string", "description" => "Path to the image file"},
+          "include_data" => %{
+            "type" => "boolean",
+            "description" => "Include base64-encoded image data in the output (default: false)"
+          }
+        },
+        "required" => ["path"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.ImageView.execute/1
     }
   }
 
@@ -779,9 +887,8 @@ defmodule Viber.Tools.Registry do
   def normalize_name(name) do
     name
     |> String.trim()
-    |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
     |> String.downcase()
-    |> String.replace("-", "_")
+    |> String.replace(~r/[^a-z0-9_]/, "_")
   end
 
   defp ets_available?, do: :ets.whereis(@ets_table) != :undefined

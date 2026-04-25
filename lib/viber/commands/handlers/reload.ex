@@ -13,7 +13,7 @@ defmodule Viber.Commands.Handlers.Reload do
 
     case HotReloader.reload(project_root) do
       {:ok, modules} ->
-        names = modules |> Enum.map(&inspect/1) |> Enum.join(", ")
+        names = Enum.map_join(modules, ", ", &inspect/1)
         count = length(modules)
 
         if count == 0 do
