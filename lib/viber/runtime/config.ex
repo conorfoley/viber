@@ -77,6 +77,33 @@ defmodule Viber.Runtime.Config do
     }
   end
 
+  @spec set_user_api_key(String.t()) :: :ok | {:error, term()}
+  def set_user_api_key(api_key) when is_binary(api_key) do
+    path = user_config_path()
+
+    existing =
+      case File.read(path) do
+        {:ok, content} ->
+          case Jason.decode(content) do
+            {:ok, map} when is_map(map) -> map
+            _ -> %{}
+          end
+
+        {:error, :enoent} ->
+          %{}
+
+        {:error, _} ->
+          %{}
+      end
+
+    updated = Map.put(existing, "apiKey", api_key)
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         {:ok, encoded} <- Jason.encode(updated, pretty: true) do
+      File.write(path, encoded)
+    end
+  end
+
   @spec get(t(), String.t()) :: term()
   def get(%__MODULE__{} = config, path) do
     case String.split(path, ".") do

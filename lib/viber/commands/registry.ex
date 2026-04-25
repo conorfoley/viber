@@ -150,6 +150,14 @@ defmodule Viber.Commands.Registry do
       usage: "/doctor",
       category: :info,
       handler: Handlers.Doctor
+    },
+    %{
+      name: "apikey",
+      aliases: [],
+      description: "Show or set the API key for the active provider",
+      usage: "/apikey [key]",
+      category: :config,
+      handler: Handlers.Apikey
     }
   ]
 

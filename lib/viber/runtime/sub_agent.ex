@@ -36,13 +36,15 @@ defmodule Viber.Runtime.SubAgent do
         project_root: parent_ctx.project_root
       )
 
+    event_handler = build_event_handler(parent_ctx.event_handler)
+
     result =
       try do
         Conversation.run(
           session: session,
           model: model,
           config: parent_ctx.config,
-          event_handler: &noop_event_handler/1,
+          event_handler: event_handler,
           permission_mode: parent_ctx.permission_mode,
           project_root: parent_ctx.project_root,
           provider_module: parent_ctx.provider_module,
@@ -66,5 +68,15 @@ defmodule Viber.Runtime.SubAgent do
     end
   end
 
-  defp noop_event_handler(_event), do: :ok
+  defp build_event_handler(parent_handler) do
+    fn event ->
+      case event do
+        %{type: :permission_request} ->
+          parent_handler.(event)
+
+        _ ->
+          :ok
+      end
+    end
+  end
 end

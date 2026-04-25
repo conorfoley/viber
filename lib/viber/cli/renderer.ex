@@ -255,8 +255,14 @@ defmodule Viber.CLI.Renderer do
   end
 
   defp read_single_char do
-    tty = File.open!("/dev/tty", [:read, :raw])
-    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"])
+    case File.open("/dev/tty", [:read, :raw]) do
+      {:ok, tty} -> read_single_char_tty(tty)
+      {:error, _} -> read_single_char_fallback()
+    end
+  end
+
+  defp read_single_char_tty(tty) do
+    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"], stderr_to_stdout: true)
 
     try do
       case IO.binread(tty, 1) do
@@ -264,20 +270,23 @@ defmodule Viber.CLI.Renderer do
         _ -> ?\n
       end
     after
-      System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
+      System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"], stderr_to_stdout: true)
       File.close(tty)
     end
   rescue
-    _ ->
-      IO.gets("")
-      |> to_string()
-      |> String.trim()
-      |> String.downcase()
-      |> case do
-        "a" -> ?a
-        "n" -> ?n
-        _ -> ?y
-      end
+    _ -> read_single_char_fallback()
+  end
+
+  defp read_single_char_fallback do
+    IO.gets("")
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "a" -> ?a
+      "n" -> ?n
+      _ -> ?y
+    end
   end
 
   defp chunk_string("", _width), do: [""]

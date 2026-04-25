@@ -15,7 +15,7 @@ defmodule Viber.API.Providers.Anthropic do
   def send_message(%MessageRequest{} = request) do
     Logger.debug("Anthropic send_message: model=#{request.model}")
 
-    with {:ok, api_key} <- get_api_key() do
+    with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
       Logger.debug("Anthropic send_message: posting to /v1/messages")
 
@@ -45,7 +45,7 @@ defmodule Viber.API.Providers.Anthropic do
   def stream_message(%MessageRequest{} = request) do
     Logger.debug("Anthropic stream_message: model=#{request.model}")
 
-    with {:ok, api_key} <- get_api_key() do
+    with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
       Logger.debug("Anthropic stream_message: posting to /v1/messages (streaming)")
 
@@ -84,7 +84,18 @@ defmodule Viber.API.Providers.Anthropic do
     end
   end
 
-  defp get_api_key do
+  defp get_api_key(%MessageRequest{provider_overrides: overrides}) do
+    case Map.get(overrides, :api_key) do
+      key when is_binary(key) and key != "" ->
+        Logger.debug("Anthropic: using api_key from provider_overrides")
+        {:ok, key}
+
+      _ ->
+        get_api_key_from_env()
+    end
+  end
+
+  defp get_api_key_from_env do
     case System.get_env("ANTHROPIC_API_KEY") do
       nil ->
         Logger.warning("ANTHROPIC_API_KEY not set in environment")

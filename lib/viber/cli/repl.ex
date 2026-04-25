@@ -125,11 +125,18 @@ defmodule Viber.CLI.Repl do
     state
     |> maybe_put(:session, patch[:session])
     |> maybe_put(:model, patch[:model])
+    |> maybe_put(:api_key, patch[:api_key])
   end
 
   defp maybe_put(state, _key, nil), do: state
   defp maybe_put(state, :session, pid) when is_pid(pid), do: %{state | session: pid}
   defp maybe_put(state, :model, model) when is_binary(model), do: %{state | model: model}
+
+  defp maybe_put(state, :api_key, key) when is_binary(key) do
+    config = state.config || %Viber.Runtime.Config{}
+    %{state | config: %{config | api_key: key}}
+  end
+
   defp maybe_put(state, _, _), do: state
 
   defp notify_resume(pid) when is_pid(pid) do
@@ -217,8 +224,25 @@ defmodule Viber.CLI.Repl do
 
   defp handle_event(%Event{type: :text_delta, payload: %{text: text}}), do: IO.write(text)
 
+  defp handle_event(%Event{type: :tool_use_start, payload: %{name: "spawn_agent", id: id}}) do
+    IO.write(Renderer.render_tool_use("spawn_agent", id))
+
+    Owl.Spinner.start(
+      id: {:sub_agent, id},
+      labels: [processing: Owl.Data.tag("  Sub-agent working...", :faint)]
+    )
+  end
+
   defp handle_event(%Event{type: :tool_use_start, payload: %{name: name, id: id}}) do
     IO.write(Renderer.render_tool_use(name, id))
+  end
+
+  defp handle_event(%Event{
+         type: :tool_result,
+         payload: %{name: "spawn_agent", id: id, output: output, is_error: is_error}
+       }) do
+    Owl.Spinner.stop(id: {:sub_agent, id}, resolution: if(is_error, do: :error, else: :ok))
+    IO.write(Renderer.render_tool_result(output, is_error))
   end
 
   defp handle_event(%Event{type: :tool_result, payload: %{output: output, is_error: is_error}}) do
