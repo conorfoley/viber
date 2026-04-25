@@ -210,7 +210,14 @@ defmodule Viber.Runtime.Conversation do
             if permission == :allow or already_allowed do
               {[{:run, id, name, input} | acc], allowed_set}
             else
-              case Broker.request(session_id, name, input_str, event_handler) do
+              broker_result =
+                try do
+                  Broker.request(session_id, name, input_str, event_handler)
+                catch
+                  :exit, _ -> :deny
+                end
+
+              case broker_result do
                 :allow ->
                   {[{:run, id, name, input} | acc], allowed_set}
 

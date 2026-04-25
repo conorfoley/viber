@@ -258,15 +258,15 @@ defmodule Viber.CLI.Renderer do
     tty = File.open!("/dev/tty", [:read, :raw])
     System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"])
 
-    byte =
+    try do
       case IO.binread(tty, 1) do
         <<c>> -> c
         _ -> ?\n
       end
-
-    System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
-    File.close(tty)
-    byte
+    after
+      System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
+      File.close(tty)
+    end
   rescue
     _ ->
       IO.gets("")
@@ -275,7 +275,7 @@ defmodule Viber.CLI.Renderer do
       |> String.downcase()
       |> case do
         "a" -> ?a
-        "n" -> ?N
+        "n" -> ?n
         _ -> ?y
       end
   end

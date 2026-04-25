@@ -143,7 +143,12 @@ defmodule Viber.Runtime.Event do
   end
 
   defp safe_atom(k) when is_atom(k), do: k
-  defp safe_atom(k) when is_binary(k), do: String.to_atom(k)
+
+  defp safe_atom(k) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> k
+  end
 
   defp encode_timestamp(nil), do: nil
   defp encode_timestamp(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
