@@ -10,7 +10,7 @@ defmodule Viber.Runtime.Conversation.Context do
           project_root: String.t(),
           provider_module: module() | nil,
           task_supervisor: atom(),
-          browser_context: map(),
+          browser_context: Viber.Runtime.BrowserContext.t() | nil,
           allowed_tools: MapSet.t(String.t()),
           interrupt: :atomics.atomics_ref() | nil,
           enabled_toolsets: [atom()] | nil
@@ -28,7 +28,7 @@ defmodule Viber.Runtime.Conversation.Context do
     permission_mode: :prompt,
     project_root: ".",
     task_supervisor: Viber.TaskSupervisor,
-    browser_context: %{},
+    browser_context: nil,
     allowed_tools: MapSet.new()
   ]
 end

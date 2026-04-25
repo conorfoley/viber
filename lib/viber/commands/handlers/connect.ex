@@ -4,6 +4,8 @@ defmodule Viber.Commands.Handlers.Connect do
   Connects to a named database or adds a new connection from a URL.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Database.ConnectionManager
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

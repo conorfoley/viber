@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Doctor do
   Handler for the /doctor command. Runs environment and connectivity checks.
   """
 
+  use Viber.Commands.Handler
+
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(_args, context) do
     config = context[:config]

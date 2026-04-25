@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Status do
   Handler for the /status command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.{Permissions, Session, Usage}
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

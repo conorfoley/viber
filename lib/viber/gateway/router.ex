@@ -250,17 +250,17 @@ defmodule Viber.Gateway.Router do
 
   defp collect_text(monitor_ref, buffer) do
     receive do
-      {:gw_event, {:text_delta, text}} ->
+      {:gw_event, %Viber.Runtime.Event{type: :text_delta, payload: %{text: text}}} ->
         collect_text(monitor_ref, buffer <> text)
 
-      {:gw_event, {:turn_complete, _usage}} ->
+      {:gw_event, %Viber.Runtime.Event{type: :turn_complete}} ->
         buffer
 
-      {:gw_event, {:error, reason}} ->
+      {:gw_event, %Viber.Runtime.Event{type: :error, payload: %{message: reason}}} ->
         Logger.error("Gateway: conversation error: #{reason}")
         buffer
 
-      {:gw_event, _other} ->
+      {:gw_event, %Viber.Runtime.Event{}} ->
         collect_text(monitor_ref, buffer)
 
       {:DOWN, ^monitor_ref, :process, _pid, _reason} ->

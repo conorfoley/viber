@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Retry do
   Handler for the /retry command. Re-sends the last user message after undoing the last turn.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.Session
 
   @spec execute([String.t()], map()) ::

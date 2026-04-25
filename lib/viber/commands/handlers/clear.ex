@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Clear do
   Handler for the /clear command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.Session
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

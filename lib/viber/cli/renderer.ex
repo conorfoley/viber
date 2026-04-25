@@ -194,6 +194,101 @@ defmodule Viber.CLI.Renderer do
     [IO.ANSI.faint(), IO.ANSI.italic(), text, IO.ANSI.reset()]
   end
 
+  @doc """
+  Display a permission request to the user and read a single-character
+  response from `/dev/tty`. Returns a broker-compatible decision.
+  """
+  @spec prompt_permission(String.t(), String.t()) :: :allow | :deny | :always_allow
+  def prompt_permission(tool_name, tool_input) do
+    width = terminal_width()
+    max_content_width = max(width - 6, 20)
+
+    truncated =
+      tool_input
+      |> String.slice(0, 500)
+      |> String.split("\n")
+      |> Enum.flat_map(fn line -> chunk_string(line, max_content_width) end)
+      |> Enum.join("\n")
+
+    content =
+      [
+        Owl.Data.tag(tool_name, [:bright, :yellow]),
+        "\n\n",
+        Owl.Data.tag(truncated, :faint)
+      ]
+
+    box =
+      content
+      |> Owl.Box.new(
+        padding_x: 1,
+        padding_y: 0,
+        border_style: :solid_rounded,
+        border_tag: :yellow,
+        title: Owl.Data.tag(" Permission Required ", :yellow)
+      )
+      |> Owl.Data.to_chardata()
+
+    IO.write(["\n", box])
+    IO.puts("")
+
+    IO.write([
+      IO.ANSI.yellow(),
+      "  Allow? ",
+      IO.ANSI.bright(),
+      "[Y/n/a] ",
+      IO.ANSI.reset()
+    ])
+
+    case read_single_char() do
+      c when c in [?a, ?A] ->
+        IO.puts("always")
+        :always_allow
+
+      c when c in [?n, ?N] ->
+        IO.puts("no")
+        :deny
+
+      _ ->
+        IO.puts("yes")
+        :allow
+    end
+  end
+
+  defp read_single_char do
+    tty = File.open!("/dev/tty", [:read, :raw])
+    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"])
+
+    byte =
+      case IO.binread(tty, 1) do
+        <<c>> -> c
+        _ -> ?\n
+      end
+
+    System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
+    File.close(tty)
+    byte
+  rescue
+    _ ->
+      IO.gets("")
+      |> to_string()
+      |> String.trim()
+      |> String.downcase()
+      |> case do
+        "a" -> ?a
+        "n" -> ?N
+        _ -> ?y
+      end
+  end
+
+  defp chunk_string("", _width), do: [""]
+
+  defp chunk_string(str, width) do
+    str
+    |> String.graphemes()
+    |> Enum.chunk_every(width)
+    |> Enum.map(&Enum.join/1)
+  end
+
   defp render_line("# " <> rest) do
     [
       IO.ANSI.bright(),

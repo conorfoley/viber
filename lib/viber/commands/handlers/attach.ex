@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Attach do
   Handler for the /attach command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.{FileRefs, Session}
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

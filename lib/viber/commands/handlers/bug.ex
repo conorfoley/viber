@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Bug do
   Handler for the /bug command.
   """
 
+  use Viber.Commands.Handler
+
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(_args, context) do
     model = context[:model] || "unknown"

@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Reload do
   Handler for the /reload command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.HotReloader
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

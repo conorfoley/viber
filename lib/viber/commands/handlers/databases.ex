@@ -4,6 +4,8 @@ defmodule Viber.Commands.Handlers.Databases do
   Lists configured database connections with their status.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Database.ConnectionManager
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

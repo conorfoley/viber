@@ -88,6 +88,11 @@ defmodule Viber.Runtime.Session do
     GenServer.call(server, {:set_model, model})
   end
 
+  @spec get_model(GenServer.server()) :: String.t() | nil
+  def get_model(server) do
+    GenServer.call(server, :get_model)
+  end
+
   @spec add_message(GenServer.server(), message()) :: :ok
   def add_message(server, message) do
     GenServer.call(server, {:add_message, message})
@@ -180,6 +185,11 @@ defmodule Viber.Runtime.Session do
   @impl true
   def handle_call({:set_model, model}, _from, state) do
     {:reply, :ok, %{state | model: model}}
+  end
+
+  @impl true
+  def handle_call(:get_model, _from, state) do
+    {:reply, state.model, state}
   end
 
   @impl true

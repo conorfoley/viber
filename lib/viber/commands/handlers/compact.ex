@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Compact do
   Handler for the /compact command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.{Compact, Session}
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

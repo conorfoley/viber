@@ -6,37 +6,31 @@ defmodule Viber.Runtime.Conversation do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Permissions, Prompt, Session, SubAgent, Usage}
-  alias Viber.Runtime.Conversation.{Context, StreamAccumulator}
+  alias Viber.Runtime.{Event, Permissions, Prompt, Session, SubAgent, Usage}
+  alias Viber.Runtime.Permissions.Broker
+  alias Viber.Runtime.Conversation.{Context, Request, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
 
-  @type event ::
-          {:text_delta, String.t()}
-          | {:tool_use_start, String.t(), String.t()}
-          | {:tool_result, String.t(), String.t(), boolean()}
-          | {:thinking_delta, String.t()}
-          | {:turn_complete, Usage.t()}
-          | {:error, String.t()}
-          | {:interrupted, String.t()}
+  @type event :: Event.t()
 
   @max_iterations 25
 
-  @spec run(keyword()) :: {:ok, term()} | {:error, term()}
-  def run(opts) do
+  @spec run(Request.t() | keyword() | map()) :: {:ok, term()} | {:error, term()}
+  def run(%Request{} = req) do
     ctx = %Context{
-      session: Keyword.fetch!(opts, :session),
-      model: Keyword.fetch!(opts, :model),
-      config: Keyword.get(opts, :config),
-      event_handler: Keyword.get(opts, :event_handler, fn _event -> :ok end),
-      permission_mode: Keyword.get(opts, :permission_mode, :prompt),
-      project_root: Keyword.get(opts, :project_root, File.cwd!()),
-      provider_module: Keyword.get(opts, :provider_module),
-      browser_context: Keyword.get(opts, :browser_context, %{}),
-      interrupt: Keyword.get(opts, :interrupt),
-      enabled_toolsets: Keyword.get(opts, :enabled_toolsets)
+      session: req.session,
+      model: req.model,
+      config: req.config,
+      event_handler: req.event_handler,
+      permission_mode: req.permission_mode,
+      project_root: req.project_root,
+      provider_module: req.provider_module,
+      browser_context: req.browser_context,
+      interrupt: req.interrupt,
+      enabled_toolsets: req.enabled_toolsets
     }
 
-    user_input = Keyword.fetch!(opts, :user_input)
+    user_input = req.user_input
     Logger.info("Conversation.run: model=#{ctx.model} input=#{String.slice(user_input, 0..80)}")
 
     user_msg = %{role: :user, blocks: [{:text, user_input}], usage: nil}
@@ -45,8 +39,10 @@ defmodule Viber.Runtime.Conversation do
     turn_loop(ctx, 0)
   end
 
+  def run(opts) when is_list(opts) or is_map(opts), do: run(Request.new(opts))
+
   defp turn_loop(%Context{event_handler: handler}, iteration) when iteration >= @max_iterations do
-    handler.({:error, "Maximum iterations (#{@max_iterations}) exceeded"})
+    handler.(Event.new(:error, %{message: "Maximum iterations (#{@max_iterations}) exceeded"}))
     {:error, :max_iterations}
   end
 
@@ -54,7 +50,7 @@ defmodule Viber.Runtime.Conversation do
        when interrupt != nil do
     if :atomics.get(interrupt, 1) == 1 do
       Logger.info("Conversation: interrupted by user at iteration #{iteration}")
-      handler.({:interrupted, "Interrupted"})
+      handler.(Event.new(:interrupted, %{message: "Interrupted"}))
       {:ok, :interrupted}
     else
       do_turn_loop(ctx, iteration)
@@ -107,7 +103,7 @@ defmodule Viber.Runtime.Conversation do
 
       {:error, err} ->
         Logger.error("Conversation turn_loop: stream error #{inspect(err)}")
-        ctx.event_handler.({:error, inspect(err)})
+        ctx.event_handler.(Event.new(:error, %{message: inspect(err)}))
         {:error, err}
     end
   end
@@ -154,7 +150,7 @@ defmodule Viber.Runtime.Conversation do
 
     if tool_uses == [] do
       Logger.debug("Conversation: turn complete, no tool calls")
-      ctx.event_handler.({:turn_complete, usage})
+      ctx.event_handler.(Event.new(:turn_complete, %{usage: usage}))
       {:ok, %{text: text_content, usage: usage, iterations: iteration + 1}}
     else
       Logger.info(
@@ -178,6 +174,7 @@ defmodule Viber.Runtime.Conversation do
   defp execute_tools(tool_uses, %Context{} = ctx) do
     permission_mode = ctx.permission_mode
     event_handler = ctx.event_handler
+    session_id = safe_session_id(ctx.session)
 
     active_specs = Registry.builtin_specs() |> filter_by_toolsets(ctx.enabled_toolsets)
 
@@ -213,14 +210,14 @@ defmodule Viber.Runtime.Conversation do
             if permission == :allow or already_allowed do
               {[{:run, id, name, input} | acc], allowed_set}
             else
-              case Permissions.prompt_user(name, input_str) do
-                :yes ->
+              case Broker.request(session_id, name, input_str, event_handler) do
+                :allow ->
                   {[{:run, id, name, input} | acc], allowed_set}
 
-                :always ->
+                :always_allow ->
                   {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
 
-                :no ->
+                :deny ->
                   reason = "tool '#{name}' denied by user"
                   {[{:denied, id, name, reason} | acc], allowed_set}
               end
@@ -240,34 +237,75 @@ defmodule Viber.Runtime.Conversation do
         decisions,
         fn
           {:run, id, "spawn_agent", input} ->
-            event_handler.({:tool_use_start, "spawn_agent", id})
+            event_handler.(Event.new(:tool_use_start, %{name: "spawn_agent", id: id}))
 
             case SubAgent.run(input, ctx) do
               {:ok, %{text: text}} ->
-                event_handler.({:tool_result, "spawn_agent", text, false})
+                event_handler.(
+                  Event.new(:tool_result, %{
+                    name: "spawn_agent",
+                    id: id,
+                    output: text,
+                    is_error: false
+                  })
+                )
+
                 {id, "spawn_agent", text, false}
 
               {:error, reason} ->
                 msg = "Sub-agent failed: #{inspect(reason)}"
-                event_handler.({:tool_result, "spawn_agent", msg, true})
+
+                event_handler.(
+                  Event.new(:tool_result, %{
+                    name: "spawn_agent",
+                    id: id,
+                    output: msg,
+                    is_error: true
+                  })
+                )
+
                 {id, "spawn_agent", msg, true}
             end
 
           {:run, id, name, input} ->
-            event_handler.({:tool_use_start, name, id})
+            event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
 
             case Executor.execute(name, input) do
               {:ok, output} ->
-                event_handler.({:tool_result, name, output, false})
+                event_handler.(
+                  Event.new(:tool_result, %{
+                    name: name,
+                    id: id,
+                    output: output,
+                    is_error: false
+                  })
+                )
+
                 {id, name, output, false}
 
               {:error, error} ->
-                event_handler.({:tool_result, name, error, true})
+                event_handler.(
+                  Event.new(:tool_result, %{
+                    name: name,
+                    id: id,
+                    output: error,
+                    is_error: true
+                  })
+                )
+
                 {id, name, error, true}
             end
 
           {:denied, id, name, reason} ->
-            event_handler.({:tool_result, name, reason, true})
+            event_handler.(
+              Event.new(:tool_result, %{
+                name: name,
+                id: id,
+                output: reason,
+                is_error: true
+              })
+            )
+
             {id, name, reason, true}
         end,
         ordered: true,
@@ -369,14 +407,14 @@ defmodule Viber.Runtime.Conversation do
   defp process_event({:content_block_delta, idx, delta}, acc, handler) do
     case {Map.get(acc.blocks, idx), delta} do
       {%{type: :text} = block, %{type: "text_delta", text: text}} ->
-        handler.({:text_delta, text})
+        handler.(Event.new(:text_delta, %{text: text}))
         %{acc | blocks: Map.put(acc.blocks, idx, %{block | text: block.text <> text})}
 
       {%{type: :tool_use} = block, %{type: "input_json_delta", partial_json: json}} ->
         %{acc | blocks: Map.put(acc.blocks, idx, %{block | input: block.input <> json})}
 
       {%{type: :thinking} = block, %{type: "thinking_delta", thinking: text}} ->
-        handler.({:thinking_delta, text})
+        handler.(Event.new(:thinking_delta, %{text: text}))
         %{acc | blocks: Map.put(acc.blocks, idx, %{block | text: block.text <> text})}
 
       _ ->
@@ -403,8 +441,10 @@ defmodule Viber.Runtime.Conversation do
     Logger.error("Conversation: stream error received: #{inspect(e)}")
 
     handler.(
-      {:error,
-       "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"}
+      Event.new(:error, %{
+        message:
+          "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"
+      })
     )
 
     %{acc | stream_error: e}
@@ -432,6 +472,14 @@ defmodule Viber.Runtime.Conversation do
       _ -> []
     end)
     |> Enum.join()
+  end
+
+  defp safe_session_id(session) do
+    Session.get_id(session)
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
   end
 
   defp filter_by_toolsets(specs, nil), do: specs

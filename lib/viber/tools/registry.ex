@@ -738,6 +738,14 @@ defmodule Viber.Tools.Registry do
     Enum.sort(builtin ++ mcp)
   end
 
+  @spec list_toolsets() :: [%{name: atom(), tools: [String.t()]}]
+  def list_toolsets do
+    builtin_specs()
+    |> Enum.group_by(& &1.toolset, & &1.name)
+    |> Enum.map(fn {ts, names} -> %{name: ts, tools: Enum.sort(names)} end)
+    |> Enum.sort_by(& &1.name)
+  end
+
   @spec register_mcp_tools(String.t(), [Spec.t()]) :: :ok
   def register_mcp_tools(server_name, specs) do
     init_mcp_table()

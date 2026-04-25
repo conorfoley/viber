@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Undo do
   Handler for the /undo command. Removes the last user turn and all subsequent messages.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.Session
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

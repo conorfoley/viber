@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Config do
   Handler for the /config command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.Config
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}
