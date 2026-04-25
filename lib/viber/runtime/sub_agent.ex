@@ -28,7 +28,8 @@ defmodule Viber.Runtime.SubAgent do
         task
       end
 
-    Logger.info("SubAgent: spawning for task=#{String.slice(task, 0..80)}")
+    sub_agent_id = generate_id()
+    Logger.info("SubAgent: spawning id=#{sub_agent_id} task=#{String.slice(task, 0..80)}")
 
     {:ok, session} =
       Session.start_link(
@@ -36,7 +37,7 @@ defmodule Viber.Runtime.SubAgent do
         project_root: parent_ctx.project_root
       )
 
-    event_handler = build_event_handler(parent_ctx.event_handler)
+    event_handler = build_event_handler(parent_ctx.event_handler, sub_agent_id)
 
     result =
       try do
@@ -68,9 +69,18 @@ defmodule Viber.Runtime.SubAgent do
     end
   end
 
-  defp build_event_handler(parent_handler) do
+  defp generate_id do
+    :crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false)
+  end
+
+  defp build_event_handler(parent_handler, sub_agent_id) do
     fn event ->
       case event do
+        %{type: type}
+        when type in [:tool_use_start, :tool_result, :text_delta, :thinking_delta, :error] ->
+          tagged = %{event | payload: Map.put(event.payload, :sub_agent_id, sub_agent_id)}
+          parent_handler.(tagged)
+
         %{type: :permission_request} ->
           parent_handler.(event)
 

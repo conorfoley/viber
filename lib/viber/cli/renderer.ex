@@ -110,6 +110,56 @@ defmodule Viber.CLI.Renderer do
     ]
   end
 
+  @spec render_sub_agent_tool_use(String.t(), String.t()) :: IO.chardata()
+  def render_sub_agent_tool_use(name, _id) do
+    icon = Map.get(@tool_icons, name, "⚡")
+
+    label =
+      [
+        Owl.Data.tag("  ↳ ", :faint),
+        Owl.Data.tag(icon <> " ", [:faint, :yellow]),
+        Owl.Data.tag(name, [:faint, :yellow])
+      ]
+      |> Owl.Data.to_chardata()
+
+    ["\n", label, "\n"]
+  end
+
+  @spec render_sub_agent_tool_result(String.t(), boolean()) :: IO.chardata()
+  def render_sub_agent_tool_result(output, is_error) do
+    truncated = String.slice(output, 0, 300)
+    lines = String.split(truncated, "\n")
+    display_lines = Enum.take(lines, 3)
+    remaining = length(lines) - 3
+
+    color = if is_error, do: :red, else: :green
+
+    content =
+      display_lines
+      |> Enum.join("\n")
+      |> Owl.Data.tag(:faint)
+      |> Owl.Data.add_prefix(Owl.Data.tag("  ↳   │ ", [:faint, color]))
+
+    suffix =
+      if remaining > 0 do
+        ["\n", IO.ANSI.faint(), "  ↳   … #{remaining} more lines", IO.ANSI.reset()]
+      else
+        []
+      end
+
+    [Owl.Data.to_chardata(content), suffix, "\n"]
+  end
+
+  @spec render_sub_agent_text_delta(String.t()) :: IO.chardata()
+  def render_sub_agent_text_delta(text) do
+    [IO.ANSI.faint(), text, IO.ANSI.reset()]
+  end
+
+  @spec render_sub_agent_thinking(String.t()) :: IO.chardata()
+  def render_sub_agent_thinking(text) do
+    [IO.ANSI.faint(), IO.ANSI.italic(), text, IO.ANSI.reset()]
+  end
+
   @spec render_tool_use(String.t(), String.t()) :: IO.chardata()
   def render_tool_use(name, id) do
     icon = Map.get(@tool_icons, name, "⚡")

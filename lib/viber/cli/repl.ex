@@ -222,6 +222,10 @@ defmodule Viber.CLI.Repl do
 
   defp event_stops_spinner?(_), do: false
 
+  defp handle_event(%Event{type: :text_delta, payload: %{text: text, sub_agent_id: _}}) do
+    IO.write(Renderer.render_sub_agent_text_delta(text))
+  end
+
   defp handle_event(%Event{type: :text_delta, payload: %{text: text}}), do: IO.write(text)
 
   defp handle_event(%Event{type: :tool_use_start, payload: %{name: "spawn_agent", id: id}}) do
@@ -229,8 +233,15 @@ defmodule Viber.CLI.Repl do
 
     Owl.Spinner.start(
       id: {:sub_agent, id},
-      labels: [processing: Owl.Data.tag("  Sub-agent working...", :faint)]
+      labels: [processing: Owl.Data.tag("  ↳ Sub-agent working...", :faint)]
     )
+  end
+
+  defp handle_event(%Event{
+         type: :tool_use_start,
+         payload: %{name: name, id: id, sub_agent_id: _}
+       }) do
+    IO.write(Renderer.render_sub_agent_tool_use(name, id))
   end
 
   defp handle_event(%Event{type: :tool_use_start, payload: %{name: name, id: id}}) do
@@ -245,8 +256,19 @@ defmodule Viber.CLI.Repl do
     IO.write(Renderer.render_tool_result(output, is_error))
   end
 
+  defp handle_event(%Event{
+         type: :tool_result,
+         payload: %{output: output, is_error: is_error, sub_agent_id: _}
+       }) do
+    IO.write(Renderer.render_sub_agent_tool_result(output, is_error))
+  end
+
   defp handle_event(%Event{type: :tool_result, payload: %{output: output, is_error: is_error}}) do
     IO.write(Renderer.render_tool_result(output, is_error))
+  end
+
+  defp handle_event(%Event{type: :thinking_delta, payload: %{text: text, sub_agent_id: _}}) do
+    IO.write(Renderer.render_sub_agent_thinking(text))
   end
 
   defp handle_event(%Event{type: :thinking_delta, payload: %{text: text}}) do
