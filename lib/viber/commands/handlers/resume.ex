@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Resume do
   Handler for the /resume command. Lists recent sessions or resumes a specific one.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.{Session, SessionStore}
 
   @spec execute([String.t()], map()) ::

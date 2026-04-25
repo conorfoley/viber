@@ -245,30 +245,31 @@ defmodule Viber.Gateway.Router do
       end)
 
     monitor_ref = Process.monitor(task_pid)
-    collect_text(monitor_ref, "")
+    chunks = collect_chunks(monitor_ref, [])
+    IO.iodata_to_binary(chunks)
   end
 
-  defp collect_text(monitor_ref, buffer) do
+  defp collect_chunks(monitor_ref, acc) do
     receive do
-      {:gw_event, {:text_delta, text}} ->
-        collect_text(monitor_ref, buffer <> text)
+      {:gw_event, %Viber.Runtime.Event{type: :text_delta, payload: %{text: text}}} ->
+        collect_chunks(monitor_ref, [acc | [text]])
 
-      {:gw_event, {:turn_complete, _usage}} ->
-        buffer
+      {:gw_event, %Viber.Runtime.Event{type: :turn_complete}} ->
+        acc
 
-      {:gw_event, {:error, reason}} ->
+      {:gw_event, %Viber.Runtime.Event{type: :error, payload: %{message: reason}}} ->
         Logger.error("Gateway: conversation error: #{reason}")
-        buffer
+        acc
 
-      {:gw_event, _other} ->
-        collect_text(monitor_ref, buffer)
+      {:gw_event, %Viber.Runtime.Event{}} ->
+        collect_chunks(monitor_ref, acc)
 
       {:DOWN, ^monitor_ref, :process, _pid, _reason} ->
-        buffer
+        acc
     after
       300_000 ->
         Logger.warning("Gateway: conversation timed out")
-        buffer
+        acc
     end
   end
 end

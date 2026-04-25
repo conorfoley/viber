@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Model do
   Handler for the /model command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.API.Client
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

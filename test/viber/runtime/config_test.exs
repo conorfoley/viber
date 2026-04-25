@@ -134,12 +134,22 @@ defmodule Viber.Runtime.ConfigTest do
 
   @tag :tmp_dir
   test "missing file returns default config", %{tmp_dir: tmp_dir} do
-    {:ok, config} = Config.load(project_root: tmp_dir)
-    assert config.model == nil
-    assert config.provider == nil
-    assert config.base_url == nil
-    assert config.mcp_servers == %{}
-    assert config.loaded_entries == []
+    original = System.get_env("XDG_CONFIG_HOME")
+    no_config_dir = Path.join(tmp_dir, "fake_config_home")
+    System.put_env("XDG_CONFIG_HOME", no_config_dir)
+
+    try do
+      {:ok, config} = Config.load(project_root: tmp_dir)
+      assert config.model == nil
+      assert config.provider == nil
+      assert config.base_url == nil
+      assert config.mcp_servers == %{}
+      assert config.loaded_entries == []
+    after
+      if original,
+        do: System.put_env("XDG_CONFIG_HOME", original),
+        else: System.delete_env("XDG_CONFIG_HOME")
+    end
   end
 
   test "get/2 resolves provider and baseUrl paths" do

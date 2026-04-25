@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Attach do
   Handler for the /attach command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Runtime.{FileRefs, Session}
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}
@@ -13,9 +15,7 @@ defmodule Viber.Commands.Handlers.Attach do
   def execute(args, context) do
     session = context[:session]
 
-    unless session do
-      {:error, "No active session"}
-    else
+    if session do
       project_root = context[:project_root] || File.cwd!()
 
       results =
@@ -45,6 +45,8 @@ defmodule Viber.Commands.Handlers.Attach do
           {:ok, summary <> "\n" <> Enum.join(errors, "\n")}
         end
       end
+    else
+      {:error, "No active session"}
     end
   end
 end

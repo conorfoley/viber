@@ -39,6 +39,30 @@ defmodule Viber.Runtime.PromptTest do
       assert prompt =~ "read-only"
       assert prompt =~ "No modifications allowed"
     end
+
+    test "browser_context nil omits section" do
+      prompt = Prompt.build(project_root: System.tmp_dir!(), browser_context: nil)
+      refute prompt =~ "Browser Context"
+    end
+
+    test "browser_context struct renders section" do
+      ctx = %Viber.Runtime.BrowserContext{url: "https://example.com", title: "Example"}
+      prompt = Prompt.build(project_root: System.tmp_dir!(), browser_context: ctx)
+      assert prompt =~ "# Browser Context"
+      assert prompt =~ "URL: https://example.com"
+      assert prompt =~ "Title: Example"
+    end
+
+    test "browser_context raw map gets coerced" do
+      prompt =
+        Prompt.build(
+          project_root: System.tmp_dir!(),
+          browser_context: %{"url" => "https://example.com"}
+        )
+
+      assert prompt =~ "# Browser Context"
+      assert prompt =~ "URL: https://example.com"
+    end
   end
 
   describe "Bootstrap.detect_stack/1" do

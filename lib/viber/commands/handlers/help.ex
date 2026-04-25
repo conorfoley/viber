@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Help do
   Handler for the /help command.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Commands.Registry
 
   @spec execute([String.t()], map()) :: {:ok, String.t()} | {:error, String.t()}

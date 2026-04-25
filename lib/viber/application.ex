@@ -13,6 +13,8 @@ defmodule Viber.Application do
       repo_children() ++
         [
           Viber.Database.ConnectionManager,
+          Viber.Runtime.Permissions.Broker,
+          Viber.Server.Interrupts,
           {Registry, keys: :unique, name: Viber.SessionRegistry},
           {DynamicSupervisor, name: Viber.SessionSupervisor, strategy: :one_for_one},
           {Task.Supervisor, name: Viber.TaskSupervisor},

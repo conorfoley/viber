@@ -94,9 +94,9 @@ defmodule Viber.Tools.Builtins.Diagnostics do
       if count == 0 do
         "No warnings found."
       else
-        findings
-        |> Enum.map(fn {:dialyzer, file, line, message} -> "#{file}:#{line}: #{message}" end)
-        |> Enum.join("\n")
+        Enum.map_join(findings, "\n", fn {:dialyzer, file, line, message} ->
+          "#{file}:#{line}: #{message}"
+        end)
       end
 
     "Tool: dialyzer\nFindings: #{count}\n\n#{body}\n\n--- Raw Output ---\n#{raw_output}"
@@ -109,11 +109,9 @@ defmodule Viber.Tools.Builtins.Diagnostics do
       if count == 0 do
         "No issues found."
       else
-        findings
-        |> Enum.map(fn {:credo, severity, file, line, message} ->
+        Enum.map_join(findings, "\n", fn {:credo, severity, file, line, message} ->
           "[#{severity}] #{file}:#{line}: #{message}"
         end)
-        |> Enum.join("\n")
       end
 
     "Tool: credo\nFindings: #{count}\n\n#{body}\n\n--- Raw Output ---\n#{raw_output}"

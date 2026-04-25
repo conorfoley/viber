@@ -114,8 +114,14 @@ defmodule Viber.Runtime.ConversationTest do
     assert {:ok, %{text: "Hello world!", iterations: 1}} = result
 
     recorded = :ets.tab2list(events) |> Enum.map(fn {_, e} -> e end)
-    assert Enum.any?(recorded, fn e -> match?({:text_delta, "Hello "}, e) end)
-    assert Enum.any?(recorded, fn e -> match?({:turn_complete, _}, e) end)
+
+    assert Enum.any?(recorded, fn e ->
+             match?(%Viber.Runtime.Event{type: :text_delta, payload: %{text: "Hello "}}, e)
+           end)
+
+    assert Enum.any?(recorded, fn e ->
+             match?(%Viber.Runtime.Event{type: :turn_complete}, e)
+           end)
 
     messages = Session.get_messages(session)
     assert length(messages) == 2
@@ -196,8 +202,14 @@ defmodule Viber.Runtime.ConversationTest do
     assert {:error, {:stream_error, _}} = result
 
     recorded = :ets.tab2list(events) |> Enum.map(fn {_, e} -> e end)
-    assert Enum.any?(recorded, fn e -> match?({:error, _}, e) end)
-    refute Enum.any?(recorded, fn e -> match?({:tool_result, "write_file", _, _}, e) end)
+    assert Enum.any?(recorded, fn e -> match?(%Viber.Runtime.Event{type: :error}, e) end)
+
+    refute Enum.any?(recorded, fn e ->
+             match?(
+               %Viber.Runtime.Event{type: :tool_result, payload: %{name: "write_file"}},
+               e
+             )
+           end)
 
     :ets.delete(events)
   end
@@ -223,7 +235,17 @@ defmodule Viber.Runtime.ConversationTest do
     )
 
     recorded = :ets.tab2list(events) |> Enum.map(fn {_, e} -> e end)
-    assert Enum.any?(recorded, fn e -> match?({:tool_result, "bash", _, true}, e) end)
+
+    assert Enum.any?(recorded, fn e ->
+             match?(
+               %Viber.Runtime.Event{
+                 type: :tool_result,
+                 payload: %{name: "bash", is_error: true}
+               },
+               e
+             )
+           end)
+
     :ets.delete(events)
   end
 end

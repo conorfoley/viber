@@ -10,7 +10,8 @@ defmodule Viber.Tools.Spec do
           permission: Viber.Runtime.Permissions.permission_mode(),
           permission_fn: (map() -> Viber.Runtime.Permissions.permission_mode()) | nil,
           handler: (map() -> {:ok, String.t()} | {:error, String.t()}) | nil,
-          toolset: atom()
+          toolset: atom(),
+          concurrent: boolean()
         }
 
   @enforce_keys [:name, :description, :input_schema, :permission]
@@ -21,7 +22,8 @@ defmodule Viber.Tools.Spec do
     :permission,
     :permission_fn,
     :handler,
-    toolset: :core
+    toolset: :core,
+    concurrent: true
   ]
 
   @spec effective_permission(t(), map()) :: Viber.Runtime.Permissions.permission_mode()

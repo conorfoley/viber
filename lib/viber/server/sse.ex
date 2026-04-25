@@ -1,9 +1,15 @@
 defmodule Viber.Server.SSE do
   @moduledoc """
   Server-Sent Events streaming for conversation events.
+
+  Consumes `%Viber.Runtime.Event{}` values and serializes them via
+  `Viber.Runtime.Event.to_map/1` — the single source of truth for the wire
+  protocol.
   """
 
   import Plug.Conn
+
+  alias Viber.Runtime.Event
 
   @spec stream(Plug.Conn.t(), String.t(), map()) :: Plug.Conn.t()
   def stream(conn, session_id, params) do
@@ -27,52 +33,25 @@ defmodule Viber.Server.SSE do
         stream_loop(conn, monitor_ref)
 
       {:error, :not_found} ->
-        send_sse_event(conn, "error", %{message: "Session not found"})
+        send_sse_event(conn, Event.new(:error, %{message: "Session not found"}))
         conn
     end
   end
 
   defp stream_loop(conn, monitor_ref) do
     receive do
-      {:sse_event, {:text_delta, text}} ->
-        case send_sse_event(conn, "text_delta", %{text: text}) do
-          {:ok, conn} -> stream_loop(conn, monitor_ref)
-          {:error, _} -> conn
+      {:sse_event, %Event{type: type} = event} ->
+        case send_sse_event(conn, event) do
+          {:ok, conn} ->
+            if terminal?(type) do
+              conn
+            else
+              stream_loop(conn, monitor_ref)
+            end
+
+          {:error, _} ->
+            conn
         end
-
-      {:sse_event, {:tool_use_start, name, id}} ->
-        case send_sse_event(conn, "tool_use_start", %{name: name, id: id}) do
-          {:ok, conn} -> stream_loop(conn, monitor_ref)
-          {:error, _} -> conn
-        end
-
-      {:sse_event, {:tool_result, name, output, is_error}} ->
-        case send_sse_event(conn, "tool_result", %{
-               name: name,
-               output: output,
-               is_error: is_error
-             }) do
-          {:ok, conn} -> stream_loop(conn, monitor_ref)
-          {:error, _} -> conn
-        end
-
-      {:sse_event, {:thinking_delta, text}} ->
-        case send_sse_event(conn, "thinking_delta", %{text: text}) do
-          {:ok, conn} -> stream_loop(conn, monitor_ref)
-          {:error, _} -> conn
-        end
-
-      {:sse_event, {:turn_complete, usage}} ->
-        send_sse_event(conn, "turn_complete", %{
-          input_tokens: usage.input_tokens,
-          output_tokens: usage.output_tokens
-        })
-
-        conn
-
-      {:sse_event, {:error, message}} ->
-        send_sse_event(conn, "error", %{message: message})
-        conn
 
       {:DOWN, ^monitor_ref, :process, _pid, _reason} ->
         conn
@@ -82,8 +61,14 @@ defmodule Viber.Server.SSE do
     end
   end
 
-  defp send_sse_event(conn, event_type, data) do
-    payload = "event: #{event_type}\ndata: #{Jason.encode!(data)}\n\n"
+  defp terminal?(:turn_complete), do: true
+  defp terminal?(:error), do: true
+  defp terminal?(:interrupted), do: true
+  defp terminal?(_), do: false
+
+  defp send_sse_event(conn, %Event{type: type} = event) do
+    data = Jason.encode!(Event.to_map(event))
+    payload = "event: #{Atom.to_string(type)}\ndata: #{data}\n\n"
     chunk(conn, payload)
   end
 end

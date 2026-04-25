@@ -122,13 +122,11 @@ defmodule Viber.Runtime.Compact do
   end
 
   defp format_messages_for_summary(messages) do
-    messages
-    |> Enum.map(fn msg ->
+    Enum.map_join(messages, "\n", fn msg ->
       role = Atom.to_string(msg.role)
       blocks_text = Enum.map_join(msg.blocks, "\n", &block_text/1)
       "[#{role}]: #{blocks_text}"
     end)
-    |> Enum.join("\n")
   end
 
   defp build_fallback_summary(messages) do

@@ -54,98 +54,6 @@ defmodule Viber.Runtime.Permissions do
     end
   end
 
-  @spec prompt_user(String.t(), String.t()) :: :yes | :no | :always
-  def prompt_user(tool_name, tool_input) do
-    width =
-      case :io.columns() do
-        {:ok, cols} -> cols
-        _ -> 80
-      end
-
-    max_content_width = max(width - 6, 20)
-
-    truncated =
-      tool_input
-      |> String.slice(0, 500)
-      |> String.split("\n")
-      |> Enum.flat_map(fn line ->
-        line
-        |> chunk_string(max_content_width)
-      end)
-      |> Enum.join("\n")
-
-    content =
-      [
-        Owl.Data.tag(tool_name, [:bright, :yellow]),
-        "\n\n",
-        Owl.Data.tag(truncated, :faint)
-      ]
-
-    box =
-      content
-      |> Owl.Box.new(
-        padding_x: 1,
-        padding_y: 0,
-        border_style: :solid_rounded,
-        border_tag: :yellow,
-        title: Owl.Data.tag(" Permission Required ", :yellow)
-      )
-      |> Owl.Data.to_chardata()
-
-    IO.write(["\n", box])
-    IO.puts("")
-
-    IO.write([
-      IO.ANSI.yellow(),
-      "  Allow? ",
-      IO.ANSI.bright(),
-      "[Y/n/a] ",
-      IO.ANSI.reset()
-    ])
-
-    char = read_single_char()
-
-    case char do
-      c when c in [?a, ?A] ->
-        IO.puts("always")
-        :always
-
-      c when c in [?n, ?N] ->
-        IO.puts("no")
-        :no
-
-      _ ->
-        IO.puts("yes")
-        :yes
-    end
-  end
-
-  defp read_single_char do
-    tty = File.open!("/dev/tty", [:read, :raw])
-    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"])
-
-    byte =
-      case IO.binread(tty, 1) do
-        <<c>> -> c
-        _ -> ?\n
-      end
-
-    System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"])
-    File.close(tty)
-    byte
-  rescue
-    _ ->
-      IO.gets("")
-      |> to_string()
-      |> String.trim()
-      |> String.downcase()
-      |> case do
-        "a" -> ?a
-        "n" -> ?N
-        _ -> ?y
-      end
-  end
-
   @spec mode_from_string(String.t()) :: permission_mode()
   def mode_from_string("read-only"), do: :read_only
   def mode_from_string("workspace-write"), do: :workspace_write
@@ -167,13 +75,4 @@ defmodule Viber.Runtime.Permissions do
   def mode_rank(:danger_full_access), do: 2
   def mode_rank(:prompt), do: -1
   def mode_rank(:allow), do: 3
-
-  defp chunk_string("", _width), do: [""]
-
-  defp chunk_string(str, width) do
-    str
-    |> String.graphemes()
-    |> Enum.chunk_every(width)
-    |> Enum.map(&Enum.join/1)
-  end
 end

@@ -110,6 +110,56 @@ defmodule Viber.CLI.Renderer do
     ]
   end
 
+  @spec render_sub_agent_tool_use(String.t(), String.t()) :: IO.chardata()
+  def render_sub_agent_tool_use(name, _id) do
+    icon = Map.get(@tool_icons, name, "⚡")
+
+    label =
+      [
+        Owl.Data.tag("  ↳ ", :faint),
+        Owl.Data.tag(icon <> " ", [:faint, :yellow]),
+        Owl.Data.tag(name, [:faint, :yellow])
+      ]
+      |> Owl.Data.to_chardata()
+
+    ["\n", label, "\n"]
+  end
+
+  @spec render_sub_agent_tool_result(String.t(), boolean()) :: IO.chardata()
+  def render_sub_agent_tool_result(output, is_error) do
+    truncated = String.slice(output, 0, 300)
+    lines = String.split(truncated, "\n")
+    display_lines = Enum.take(lines, 3)
+    remaining = length(lines) - 3
+
+    color = if is_error, do: :red, else: :green
+
+    content =
+      display_lines
+      |> Enum.join("\n")
+      |> Owl.Data.tag(:faint)
+      |> Owl.Data.add_prefix(Owl.Data.tag("  ↳   │ ", [:faint, color]))
+
+    suffix =
+      if remaining > 0 do
+        ["\n", IO.ANSI.faint(), "  ↳   … #{remaining} more lines", IO.ANSI.reset()]
+      else
+        []
+      end
+
+    [Owl.Data.to_chardata(content), suffix, "\n"]
+  end
+
+  @spec render_sub_agent_text_delta(String.t()) :: IO.chardata()
+  def render_sub_agent_text_delta(text) do
+    [IO.ANSI.faint(), text, IO.ANSI.reset()]
+  end
+
+  @spec render_sub_agent_thinking(String.t()) :: IO.chardata()
+  def render_sub_agent_thinking(text) do
+    [IO.ANSI.faint(), IO.ANSI.italic(), text, IO.ANSI.reset()]
+  end
+
   @spec render_tool_use(String.t(), String.t()) :: IO.chardata()
   def render_tool_use(name, id) do
     icon = Map.get(@tool_icons, name, "⚡")
@@ -192,6 +242,110 @@ defmodule Viber.CLI.Renderer do
   @spec render_thinking(String.t()) :: IO.chardata()
   def render_thinking(text) do
     [IO.ANSI.faint(), IO.ANSI.italic(), text, IO.ANSI.reset()]
+  end
+
+  @doc """
+  Display a permission request to the user and read a single-character
+  response from `/dev/tty`. Returns a broker-compatible decision.
+  """
+  @spec prompt_permission(String.t(), String.t()) :: :allow | :deny | :always_allow
+  def prompt_permission(tool_name, tool_input) do
+    width = terminal_width()
+    max_content_width = max(width - 6, 20)
+
+    truncated =
+      tool_input
+      |> String.slice(0, 500)
+      |> String.split("\n")
+      |> Enum.flat_map(fn line -> chunk_string(line, max_content_width) end)
+      |> Enum.join("\n")
+
+    content =
+      [
+        Owl.Data.tag(tool_name, [:bright, :yellow]),
+        "\n\n",
+        Owl.Data.tag(truncated, :faint)
+      ]
+
+    box =
+      content
+      |> Owl.Box.new(
+        padding_x: 1,
+        padding_y: 0,
+        border_style: :solid_rounded,
+        border_tag: :yellow,
+        title: Owl.Data.tag(" Permission Required ", :yellow)
+      )
+      |> Owl.Data.to_chardata()
+
+    IO.write(["\n", box])
+    IO.puts("")
+
+    IO.write([
+      IO.ANSI.yellow(),
+      "  Allow? ",
+      IO.ANSI.bright(),
+      "[Y/n/a] ",
+      IO.ANSI.reset()
+    ])
+
+    case read_single_char() do
+      c when c in [?a, ?A] ->
+        IO.puts("always")
+        :always_allow
+
+      c when c in [?n, ?N] ->
+        IO.puts("no")
+        :deny
+
+      _ ->
+        IO.puts("yes")
+        :allow
+    end
+  end
+
+  defp read_single_char do
+    case File.open("/dev/tty", [:read, :raw]) do
+      {:ok, tty} -> read_single_char_tty(tty)
+      {:error, _} -> read_single_char_fallback()
+    end
+  end
+
+  defp read_single_char_tty(tty) do
+    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"], stderr_to_stdout: true)
+
+    try do
+      case IO.binread(tty, 1) do
+        <<c>> -> c
+        _ -> ?\n
+      end
+    after
+      System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"], stderr_to_stdout: true)
+      File.close(tty)
+    end
+  rescue
+    _ -> read_single_char_fallback()
+  end
+
+  defp read_single_char_fallback do
+    IO.gets("")
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "a" -> ?a
+      "n" -> ?n
+      _ -> ?y
+    end
+  end
+
+  defp chunk_string("", _width), do: [""]
+
+  defp chunk_string(str, width) do
+    str
+    |> String.graphemes()
+    |> Enum.chunk_every(width)
+    |> Enum.map(&Enum.join/1)
   end
 
   defp render_line("# " <> rest) do

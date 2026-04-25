@@ -19,7 +19,7 @@ defmodule Viber.Runtime.Prompt do
     config = Keyword.get(opts, :config)
     permission_mode = Keyword.get(opts, :permission_mode, :prompt)
     custom_instructions = Keyword.get(opts, :custom_instructions)
-    browser_context = Keyword.get(opts, :browser_context, %{})
+    browser_context = Keyword.get(opts, :browser_context)
 
     [
       role_section(),
@@ -75,32 +75,44 @@ defmodule Viber.Runtime.Prompt do
     Enum.join(lines, "\n")
   end
 
-  defp browser_context_section(ctx) when map_size(ctx) == 0, do: nil
+  defp browser_context_section(nil), do: nil
 
-  defp browser_context_section(ctx) do
-    lines = ["# Browser Context"]
+  defp browser_context_section(%Viber.Runtime.BrowserContext{} = ctx) do
+    if Viber.Runtime.BrowserContext.empty?(ctx) do
+      nil
+    else
+      lines = ["# Browser Context"]
 
-    lines =
-      if Map.has_key?(ctx, "url"),
-        do: lines ++ [" - URL: #{ctx["url"]}"],
-        else: lines
+      lines = if ctx.url, do: lines ++ [" - URL: #{ctx.url}"], else: lines
+      lines = if ctx.title, do: lines ++ [" - Title: #{ctx.title}"], else: lines
+      lines = if ctx.selection, do: lines ++ [" - Selection: #{ctx.selection}"], else: lines
 
-    lines =
-      if Map.has_key?(ctx, "title"),
-        do: lines ++ [" - Title: #{ctx["title"]}"],
-        else: lines
+      lines =
+        if ctx.accessibility_tree,
+          do: lines ++ [" - Accessibility Tree:\n#{ctx.accessibility_tree}"],
+          else: lines
 
-    lines =
-      if Map.has_key?(ctx, "accessibility_tree"),
-        do: lines ++ [" - Accessibility Tree:\n#{ctx["accessibility_tree"]}"],
-        else: lines
+      lines =
+        if ctx.focused_element,
+          do: lines ++ [" - Focused Element: #{inspect(ctx.focused_element)}"],
+          else: lines
 
-    lines =
-      if Map.has_key?(ctx, "focused_element"),
-        do: lines ++ [" - Focused Element: #{inspect(ctx["focused_element"])}"],
-        else: lines
+      lines =
+        if ctx.dom_snippet,
+          do: lines ++ [" - DOM Snippet:\n#{ctx.dom_snippet}"],
+          else: lines
 
-    Enum.join(lines, "\n")
+      lines =
+        if ctx.viewport,
+          do: lines ++ [" - Viewport: #{inspect(ctx.viewport)}"],
+          else: lines
+
+      Enum.join(lines, "\n")
+    end
+  end
+
+  defp browser_context_section(ctx) when is_map(ctx) do
+    browser_context_section(Viber.Runtime.BrowserContext.new(ctx))
   end
 
   defp tool_instructions_section do
@@ -139,16 +151,27 @@ defmodule Viber.Runtime.Prompt do
       Path.join([project_root, ".viber", "instructions.md"])
     ]
 
-    contents =
-      Enum.flat_map(candidates, fn path ->
+    readable =
+      Enum.filter(candidates, fn path ->
         case File.read(path) do
-          {:ok, content} when content != "" ->
-            trimmed = String.trim(content)
-            if trimmed != "", do: ["## #{Path.basename(path)}\n#{trimmed}"], else: []
-
-          _ ->
-            []
+          {:ok, content} when content != "" -> String.trim(content) != ""
+          _ -> false
         end
+      end)
+
+    viber_present = Enum.any?(readable, &(Path.basename(&1) == "VIBER.md"))
+
+    deduped =
+      if viber_present do
+        Enum.reject(readable, &(Path.basename(&1) == "AGENTS.md"))
+      else
+        readable
+      end
+
+    contents =
+      Enum.map(deduped, fn path ->
+        {:ok, content} = File.read(path)
+        "## #{Path.basename(path)}\n#{String.trim(content)}"
       end)
 
     if contents == [] do

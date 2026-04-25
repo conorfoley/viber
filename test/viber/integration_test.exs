@@ -147,8 +147,8 @@ defmodule Viber.IntegrationTest do
       |> Enum.sort_by(fn {t, _} -> t end)
       |> Enum.map(fn {_, e} -> e end)
 
-    assert Enum.any?(recorded, &match?({:text_delta, _}, &1))
-    assert List.last(recorded) |> elem(0) == :turn_complete
+    assert Enum.any?(recorded, &match?(%Viber.Runtime.Event{type: :text_delta}, &1))
+    assert %Viber.Runtime.Event{type: :turn_complete} = List.last(recorded)
     :ets.delete(events)
   end
 

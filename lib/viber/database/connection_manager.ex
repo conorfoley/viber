@@ -119,18 +119,14 @@ defmodule Viber.Database.ConnectionManager do
 
   def handle_call({:remove_connection, name}, _from, state) do
     case Map.fetch(state.repos, name) do
-      {:ok, repo} ->
-        repo.stop()
-        repos = Map.delete(state.repos, name)
-        conns = Map.delete(state.connections, name)
-        active = if state.active == name, do: nil, else: state.active
-        {:reply, :ok, %{state | connections: conns, repos: repos, active: active}}
-
-      :error ->
-        conns = Map.delete(state.connections, name)
-        active = if state.active == name, do: nil, else: state.active
-        {:reply, :ok, %{state | connections: conns, active: active}}
+      {:ok, repo} -> repo.stop()
+      :error -> :ok
     end
+
+    repos = Map.delete(state.repos, name)
+    conns = Map.delete(state.connections, name)
+    active = if state.active == name, do: nil, else: state.active
+    {:reply, :ok, %{state | connections: conns, repos: repos, active: active}}
   end
 
   def handle_call({:connect, name}, _from, state) do
@@ -212,31 +208,7 @@ defmodule Viber.Database.ConnectionManager do
   end
 
   def handle_call({:test_connection, name}, _from, state) do
-    case Map.fetch(state.connections, name) do
-      {:ok, _config} ->
-        case Map.fetch(state.repos, name) do
-          {:ok, repo} ->
-            try do
-              case Ecto.Adapters.SQL.query(repo, "SELECT 1", [], timeout: 5_000) do
-                {:ok, _} ->
-                  {:reply, {:ok, "Connection '#{name}' is healthy"}, state}
-
-                {:error, reason} ->
-                  {:reply, {:error, "Connection test failed: #{inspect(reason)}"}, state}
-              end
-            rescue
-              e -> {:reply, {:error, "Connection test failed: #{Exception.message(e)}"}, state}
-            end
-
-          :error ->
-            {:reply,
-             {:error, "Connection '#{name}' is not connected. Use /connect #{name} first."},
-             state}
-        end
-
-      :error ->
-        {:reply, {:error, "Unknown connection: #{name}"}, state}
-    end
+    {:reply, do_test_connection(name, state), state}
   end
 
   @impl true
@@ -246,6 +218,28 @@ defmodule Viber.Database.ConnectionManager do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp do_test_connection(name, state) do
+    with {:ok, _config} <-
+           Map.fetch(state.connections, name) |> wrap_fetch("Unknown connection: #{name}"),
+         {:ok, repo} <-
+           Map.fetch(state.repos, name)
+           |> wrap_fetch("Connection '#{name}' is not connected. Use /connect #{name} first.") do
+      ping_repo(repo, name)
+    end
+  end
+
+  defp wrap_fetch({:ok, val}, _msg), do: {:ok, val}
+  defp wrap_fetch(:error, msg), do: {:error, msg}
+
+  defp ping_repo(repo, name) do
+    case Ecto.Adapters.SQL.query(repo, "SELECT 1", [], timeout: 5_000) do
+      {:ok, _} -> {:ok, "Connection '#{name}' is healthy"}
+      {:error, reason} -> {:error, "Connection test failed: #{inspect(reason)}"}
+    end
+  rescue
+    e -> {:error, "Connection test failed: #{Exception.message(e)}"}
+  end
 
   defp load_databases_config(state) do
     path = config_file_path()
@@ -335,7 +329,7 @@ defmodule Viber.Database.ConnectionManager do
   defp start_repo(name, config) do
     repo_module = dynamic_repo_module(name)
 
-    unless Code.ensure_loaded?(repo_module) do
+    if not Code.ensure_loaded?(repo_module) do
       adapter = adapter_for(config.type)
 
       Module.create(

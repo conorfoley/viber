@@ -24,9 +24,7 @@ defmodule Viber.Scheduler.AlertSink do
   defp send_slack(job, output, sink) do
     url = sink["webhook_url"]
 
-    unless url do
-      Logger.warning("Slack alert sink missing webhook_url for job #{job.name}")
-    else
+    if url do
       payload =
         Jason.encode!(%{
           text: "🔔 *Viber Job Alert: #{job.name}*\n```#{String.slice(output, 0, 2000)}```"
@@ -42,6 +40,8 @@ defmodule Viber.Scheduler.AlertSink do
         {:error, reason} ->
           Logger.warning("Slack alert failed for job #{job.name}: #{inspect(reason)}")
       end
+    else
+      Logger.warning("Slack alert sink missing webhook_url for job #{job.name}")
     end
   end
 

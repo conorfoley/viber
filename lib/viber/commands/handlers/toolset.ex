@@ -3,6 +3,8 @@ defmodule Viber.Commands.Handlers.Toolset do
   Handler for the /toolset command. Shows, enables, or disables tool groups.
   """
 
+  use Viber.Commands.Handler
+
   alias Viber.Tools.{Registry, Toolsets}
 
   @spec execute([String.t()], map()) ::
