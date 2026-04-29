@@ -1,7 +1,11 @@
 # Project Instructions
 
 ## Overview
-Viber is an Elixir port of the Claw AI coding assistant. It provides an interactive CLI/REPL and an HTTP/SSE server for LLM-powered coding workflows. Built as an OTP application with an escript entry point. Includes database tooling (MySQL/PostgreSQL), scheduled job execution, and hot code reloading.
+Viber is a full Web Accessibility and Coding Assistant built in Elixir/OTP. It provides an interactive CLI/REPL and an HTTP/SSE server for LLM-powered coding workflows, with database tooling (MySQL/PostgreSQL), scheduled job execution, browser integration, and hot code reloading.
+
+> **Motto:** *If the web can't do it, Viber can build you a webapp that can.*
+
+Viber navigates and interprets live web pages via its browser integration, making it capable of web accessibility auditing, content extraction, and interaction — as well as scaffolding or building a full webapp when the browser alone falls short.
 
 ## Stack
 - Language: Elixir 1.19 / OTP
