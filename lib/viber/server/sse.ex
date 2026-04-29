@@ -9,6 +9,8 @@ defmodule Viber.Server.SSE do
 
   import Plug.Conn
 
+  require Logger
+
   alias Viber.Runtime.Event
 
   @spec stream(Plug.Conn.t(), String.t(), map()) :: Plug.Conn.t()
@@ -29,8 +31,9 @@ defmodule Viber.Server.SSE do
 
     case Viber.Server.SessionHandler.send_message(session_id, params, event_handler) do
       {:ok, task_pid} ->
+        Logger.info("SSE: stream started session=#{session_id} task=#{inspect(task_pid)}")
         monitor_ref = Process.monitor(task_pid)
-        stream_loop(conn, monitor_ref)
+        stream_loop(conn, session_id, monitor_ref)
 
       {:error, :not_found} ->
         send_sse_event(conn, Event.new(:error, %{message: "Session not found"}))
@@ -38,25 +41,31 @@ defmodule Viber.Server.SSE do
     end
   end
 
-  defp stream_loop(conn, monitor_ref) do
+  defp stream_loop(conn, session_id, monitor_ref) do
     receive do
       {:sse_event, %Event{type: type} = event} ->
+        Logger.debug("SSE: sending event=#{type} session=#{session_id}")
+
         case send_sse_event(conn, event) do
           {:ok, conn} ->
             if terminal?(type) do
+              Logger.info("SSE: stream complete event=#{type} session=#{session_id}")
               conn
             else
-              stream_loop(conn, monitor_ref)
+              stream_loop(conn, session_id, monitor_ref)
             end
 
-          {:error, _} ->
+          {:error, reason} ->
+            Logger.warning("SSE: send error event=#{type} session=#{session_id} reason=#{inspect(reason)}")
             conn
         end
 
-      {:DOWN, ^monitor_ref, :process, _pid, _reason} ->
+      {:DOWN, ^monitor_ref, :process, _pid, reason} ->
+        Logger.info("SSE: task down session=#{session_id} reason=#{inspect(reason)}")
         conn
     after
       300_000 ->
+        Logger.warning("SSE: stream timeout session=#{session_id}")
         conn
     end
   end

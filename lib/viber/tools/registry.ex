@@ -795,6 +795,123 @@ defmodule Viber.Tools.Registry do
       },
       permission: :read_only,
       handler: &Builtins.ImageView.execute/1
+    },
+    "browser_click" => %Spec{
+      name: "browser_click",
+      toolset: :browser,
+      description:
+        "Click an element on the current browser page identified by its accessibility ref [N].",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "ref" => %{"type" => "integer", "description" => "Accessibility ref number [N]"}
+        },
+        "required" => ["ref"],
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
+    },
+    "browser_type" => %Spec{
+      name: "browser_type",
+      toolset: :browser,
+      description:
+        "Focus an element identified by its accessibility ref [N] and type text into it.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "ref" => %{"type" => "integer", "description" => "Accessibility ref number [N]"},
+          "text" => %{"type" => "string", "description" => "Text to type"}
+        },
+        "required" => ["ref", "text"],
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
+    },
+    "browser_scroll" => %Spec{
+      name: "browser_scroll",
+      toolset: :browser,
+      description: "Scroll the page or a specific element in a given direction.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "direction" => %{
+            "type" => "string",
+            "enum" => ["up", "down", "left", "right"],
+            "description" => "Scroll direction"
+          },
+          "amount" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Pixel amount to scroll (default 300)"
+          },
+          "ref" => %{
+            "type" => "integer",
+            "description" => "Optional accessibility ref to scroll a specific element"
+          }
+        },
+        "required" => ["direction"],
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
+    },
+    "browser_navigate" => %Spec{
+      name: "browser_navigate",
+      toolset: :browser,
+      description: "Navigate the browser to a URL.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "url" => %{"type" => "string", "description" => "URL to navigate to"}
+        },
+        "required" => ["url"],
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
+    },
+    "browser_focus" => %Spec{
+      name: "browser_focus",
+      toolset: :browser,
+      description: "Focus an element on the current browser page by its accessibility ref [N].",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "ref" => %{"type" => "integer", "description" => "Accessibility ref number [N]"}
+        },
+        "required" => ["ref"],
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
+    },
+    "browser_get_accessibility_tree" => %Spec{
+      name: "browser_get_accessibility_tree",
+      toolset: :browser,
+      description:
+        "Fetch a fresh snapshot of the page accessibility tree. " <>
+          "Use mode \"interactive\" (default) for action tasks or \"full\" to include all text content.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["interactive", "full"],
+            "description" => "Tree verbosity: interactive (default) or full"
+          }
+        },
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
     }
   }
 

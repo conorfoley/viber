@@ -32,7 +32,14 @@ defmodule Viber.MixProject do
 
   defp aliases do
     [
-      "test.live": ["test --include live"]
+      "test.live": ["test --include live"],
+      checklist: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "test",
+        "credo",
+        "dialyzer"
+      ]
     ]
   end
 

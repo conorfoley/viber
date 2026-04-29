@@ -5,8 +5,11 @@ defmodule Viber.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
+    maybe_add_file_logger()
     Viber.Tools.Registry.init_mcp_table()
 
     children =
@@ -14,6 +17,7 @@ defmodule Viber.Application do
         [
           Viber.Database.ConnectionManager,
           Viber.Runtime.Permissions.Broker,
+          Viber.Runtime.BrowserAction.Broker,
           Viber.Server.Interrupts,
           {Registry, keys: :unique, name: Viber.SessionRegistry},
           {DynamicSupervisor, name: Viber.SessionSupervisor, strategy: :one_for_one},
@@ -66,5 +70,32 @@ defmodule Viber.Application do
     else
       []
     end
+  end
+
+  defp maybe_add_file_logger do
+    if Mix.env() == :dev do
+      :logger.update_handler_config(:default, :level, :warning)
+
+      log_path = Path.join(File.cwd!(), "log/server.log")
+      File.mkdir_p!(Path.dirname(log_path))
+
+      :logger.add_handler(:file_logger, :logger_std_h, %{
+        config: %{
+          type: :file,
+          file: String.to_charlist(log_path),
+          filesync_repeat_interval: 1000
+        },
+        level: :info,
+        formatter:
+          {:logger_formatter,
+           %{
+             template: [:time, " [", :level, "] ", :msg, "\n"],
+             single_line: true
+           }}
+      })
+    end
+  rescue
+    e ->
+      IO.puts("[Application] Failed to set up file logger: #{inspect(e)}")
   end
 end

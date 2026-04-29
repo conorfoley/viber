@@ -1,0 +1,21 @@
+{
+  "name": "viber-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "clean": "rm -rf output .wxt/cache .wxt/types"
+  },
+  "dependencies": {
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@wxt-dev/module-svelte": "^2.0.0",
+    "typescript": "^5.0.0",
+    "wxt": "^0.19.0"
+  }
+}

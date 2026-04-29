@@ -23,12 +23,17 @@ mix compile           # Compile the project
 mix test              # Run all tests
 mix test path/to/test.exs          # Run a single test file
 mix test path/to/test.exs:42       # Run a specific test by line
+mix test --failed     # Re-run only previously failed tests
 mix format            # Format code
 mix format --check-formatted       # Check formatting (CI)
+mix credo             # Run Credo static analysis
 mix dialyzer          # Run Dialyzer for static type analysis
+mix checklist         # Run all checks: format, compile, test, credo, dialyzer
 mix viber             # Start the interactive REPL
 mix escript.build     # Build the CLI escript binary
 ```
+
+Use `mix checklist` when finishing any set of changes to catch issues before committing.
 
 ## Coding Style & Naming Conventions
 
@@ -44,12 +49,35 @@ mix escript.build     # Build the CLI escript binary
 - Mock provider: `test/support/mock_provider.ex` implements the `Viber.API.Provider` behaviour for testing.
 - Integration tests: `test/viber/integration_test.exs` covers cross-module workflows.
 
+## Elixir Gotchas
+
+- **List index access**: Lists do not support `list[i]`. Use `Enum.at(list, i)`, pattern matching, or `List` functions instead.
+- **Block expression rebinding**: The result of `if`/`case`/`cond` must be bound at the call site. Rebinding a variable inside the block has no effect outside it:
+  ```elixir
+  # WRONG — socket is unchanged after this
+  if condition do
+    socket = assign(socket, :key, value)
+  end
+
+  # CORRECT
+  socket = if condition do
+    assign(socket, :key, value)
+  else
+    socket
+  end
+  ```
+- **Struct field access**: Never use `struct[:field]` on structs that don't implement `Access`. Always use `struct.field` directly.
+- **`String.to_atom/1` on user input**: Atoms are not garbage collected — never convert arbitrary user/external input to atoms. Use `String.to_existing_atom/1` if the atom must already exist.
+- **Predicate naming**: Predicate functions must end in `?` (e.g., `connected?/1`), never start with `is_`. The `is_` prefix is reserved for guard macros.
+- **Never nest modules in the same file**: Multiple `defmodule` blocks in one file can cause cyclic dependency and compilation errors.
+
 ## Idiomatic Elixir Review Checklist
 
 - Keep stream/event adapters incremental: when converting provider stream chunks, emit only the new delta fragment, not the accumulated buffer.
 - Keep specs and call sites aligned: if a function contract expects a map payload, avoid passing `nil`; use `%{}` for empty params.
 - Treat `mix dialyzer` warnings as merge blockers for public/runtime paths (`lib/`), especially unknown function and contract warnings.
 - Add focused tests for streaming tool-call assembly and MCP notification payload shapes to prevent regressions in protocol adapters.
+- Verify error handling is complete: every `{:error, reason}` return and `rescue`/`catch` block should be handled or explicitly propagated — avoid silently swallowing errors.
 
 ## Dependencies
 

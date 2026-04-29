@@ -6,7 +6,18 @@ defmodule Viber.Runtime.Conversation do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Compact, Event, Permissions, Prompt, Session, SubAgent, Usage}
+
+  alias Viber.Runtime.{
+    BrowserAction,
+    Compact,
+    Event,
+    Permissions,
+    Prompt,
+    Session,
+    SubAgent,
+    Usage
+  }
+
   alias Viber.Runtime.Permissions.Broker
   alias Viber.Runtime.Conversation.{Context, Request, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
@@ -14,6 +25,15 @@ defmodule Viber.Runtime.Conversation do
   @type event :: Event.t()
 
   @default_max_iterations 25
+
+  @browser_tool_names ~w[
+    browser_click
+    browser_type
+    browser_scroll
+    browser_navigate
+    browser_focus
+    browser_get_accessibility_tree
+  ]
 
   @spec run(Request.t() | keyword() | map()) :: {:ok, term()} | {:error, term()}
   def run(%Request{} = req) do
@@ -84,10 +104,10 @@ defmodule Viber.Runtime.Conversation do
 
     tool_defs =
       Registry.builtin_specs()
-      |> filter_by_toolsets(ctx.enabled_toolsets)
+      |> filter_by_toolsets(effective_toolsets(ctx))
       |> Enum.map(&Spec.to_tool_definition/1)
 
-    api_messages = Enum.map(messages, &to_api_message/1)
+    api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
 
     request = %MessageRequest{
       model: Client.resolve_model_alias(ctx.model),
@@ -184,7 +204,7 @@ defmodule Viber.Runtime.Conversation do
     event_handler = ctx.event_handler
     session_id = safe_session_id(ctx.session)
 
-    active_specs = Registry.builtin_specs() |> filter_by_toolsets(ctx.enabled_toolsets)
+    active_specs = Registry.builtin_specs() |> filter_by_toolsets(effective_toolsets(ctx))
 
     specs_by_name =
       active_specs
@@ -286,6 +306,43 @@ defmodule Viber.Runtime.Conversation do
     {results, ctx}
   end
 
+  defp run_decision({:run, id, name, input}, ctx, event_handler)
+       when name in @browser_tool_names do
+    session_id = safe_session_id(ctx.session)
+    Logger.info("Conversation: browser tool start name=#{name} id=#{id}")
+    event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
+
+    case BrowserAction.Broker.request(session_id, name, input, event_handler) do
+      {:ok, %{"output" => output, "is_error" => true}} ->
+        Logger.info("Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}")
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: true})
+        )
+
+        {id, name, output, true}
+
+      {:ok, %{"output" => output}} ->
+        Logger.info("Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}")
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
+        )
+
+        {id, name, output, false}
+
+      {:error, :timeout} ->
+        msg = "Browser action '#{name}' timed out — is the extension connected?"
+        Logger.warning("Conversation: browser tool timeout name=#{name} id=#{id}")
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: msg, is_error: true})
+        )
+
+        {id, name, msg, true}
+    end
+  end
+
   defp run_decision({:run, id, "spawn_agent", input}, ctx, event_handler) do
     event_handler.(Event.new(:tool_use_start, %{name: "spawn_agent", id: id}))
 
@@ -356,6 +413,60 @@ defmodule Viber.Runtime.Conversation do
 
   defp ensure_parsed_input(input) when is_map(input), do: input
   defp ensure_parsed_input(input) when is_binary(input), do: parse_tool_input(input)
+
+  defp sanitize_messages(messages) do
+    messages
+    |> Enum.with_index()
+    |> Enum.map(fn {msg, idx} ->
+      next = Enum.at(messages, idx + 1)
+      sanitize_message(msg, next)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp sanitize_message(%{role: :assistant, blocks: blocks} = msg, next_msg) do
+    tool_use_ids =
+      Enum.flat_map(blocks, fn
+        {:tool_use, id, _name, _input} -> [id]
+        _ -> []
+      end)
+
+    if tool_use_ids == [] do
+      msg
+    else
+      result_ids =
+        case next_msg do
+          %{blocks: next_blocks} ->
+            Enum.flat_map(next_blocks, fn
+              {:tool_result, id, _name, _output, _err} -> [id]
+              _ -> []
+            end)
+
+          nil ->
+            []
+        end
+
+      missing = tool_use_ids -- result_ids
+
+      if missing == [] do
+        msg
+      else
+        clean_blocks =
+          Enum.reject(blocks, fn
+            {:tool_use, id, _name, _input} -> id in missing
+            _ -> false
+          end)
+
+        if clean_blocks == [] do
+          nil
+        else
+          %{msg | blocks: clean_blocks}
+        end
+      end
+    end
+  end
+
+  defp sanitize_message(msg, _next), do: msg
 
   defp to_api_message(%{role: role, blocks: blocks}) do
     api_role =
@@ -504,6 +615,22 @@ defmodule Viber.Runtime.Conversation do
   defp filter_by_toolsets(specs, toolsets) do
     toolset_set = MapSet.new(toolsets)
     Enum.filter(specs, fn spec -> MapSet.member?(toolset_set, spec.toolset) end)
+  end
+
+  defp effective_toolsets(%Context{enabled_toolsets: toolsets, browser_context: browser_ctx}) do
+    auto_activate? =
+      Application.get_env(:viber, :browser_toolset, [])
+      |> Keyword.get(:auto_activate, true)
+
+    if auto_activate? and not is_nil(browser_ctx) do
+      case toolsets do
+        nil -> nil
+        [] -> []
+        list -> Enum.uniq([:browser | list])
+      end
+    else
+      toolsets
+    end
   end
 
   defp config_overrides(nil), do: []

@@ -2,6 +2,10 @@ import Config
 
 config :viber, ecto_repos: [Viber.Repo]
 
+config :viber, :browser_toolset,
+  auto_activate: true,
+  action_timeout_ms: 30_000
+
 config :viber, Viber.Repo,
   database: "viber_#{config_env()}",
   username: System.get_env("PGUSER") || System.get_env("USER"),

@@ -51,6 +51,14 @@ defmodule Viber.Tools.Toolsets do
       label: "System",
       description: "Clipboard, JSON processing, and user interaction tools",
       tools: ~w[clipboard jq user_input]
+    },
+    %{
+      name: :browser,
+      label: "Browser",
+      description:
+        "Browser accessibility tools for interacting with web pages via the Viber browser extension",
+      tools:
+        ~w[browser_click browser_type browser_scroll browser_navigate browser_focus browser_get_accessibility_tree]
     }
   ]
 

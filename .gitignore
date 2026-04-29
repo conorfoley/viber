@@ -38,3 +38,6 @@ viber-*.tar
 .idea/
 
 agent_docs/
+
+# Dev log files
+/log/

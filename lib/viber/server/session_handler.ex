@@ -3,7 +3,7 @@ defmodule Viber.Server.SessionHandler do
   Session lifecycle management for HTTP API.
   """
 
-  alias Viber.Runtime.{Permissions, Session, SessionStore, Usage}
+  alias Viber.Runtime.{Config, Permissions, Session, SessionStore, Usage}
   alias Viber.Server.Interrupts
 
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
@@ -44,6 +44,8 @@ defmodule Viber.Server.SessionHandler do
             mode -> Permissions.mode_from_string(mode)
           end
 
+        {:ok, config} = Config.load()
+
         interrupt_ref = Interrupts.register(session_id)
 
         task =
@@ -56,7 +58,8 @@ defmodule Viber.Server.SessionHandler do
                 event_handler: event_handler,
                 permission_mode: permission_mode,
                 browser_context: browser_context,
-                interrupt: interrupt_ref
+                interrupt: interrupt_ref,
+                config: config
               )
             after
               Interrupts.clear(session_id)

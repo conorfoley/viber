@@ -40,7 +40,7 @@ defmodule Viber.Runtime.Event do
 
   @wire_version 1
 
-  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result info)
+  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result info browser_action browser_action_result)
 
   @type type ::
           :text_delta
@@ -58,6 +58,8 @@ defmodule Viber.Runtime.Event do
           | :session_cleared
           | :command_result
           | :info
+          | :browser_action
+          | :browser_action_result
 
   @type t :: %__MODULE__{
           type: type(),
@@ -222,7 +224,17 @@ defmodule Viber.Runtime.Event do
           "text" => "string | null",
           "state_patch" => "object"
         },
-        "info" => %{"message" => "string"}
+        "info" => %{"message" => "string"},
+        "browser_action" => %{
+          "action_id" => "string",
+          "tool_name" => "string",
+          "input" => "object"
+        },
+        "browser_action_result" => %{
+          "action_id" => "string",
+          "output" => "string",
+          "is_error" => "boolean"
+        }
       },
       "usage_map" => %{
         "input_tokens" => "integer",

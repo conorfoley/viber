@@ -81,15 +81,21 @@ defmodule Viber.Runtime.Prompt do
     if Viber.Runtime.BrowserContext.empty?(ctx) do
       nil
     else
-      lines = ["# Browser Context"]
+      lines = [
+        "# Browser Context",
+        "You are connected to a live browser page via the Viber browser extension.",
+        "Elements in the accessibility tree are identified by integer refs in brackets, e.g. [9].",
+        "Use these refs as the `ref` argument to browser tools (browser_click, browser_type, etc.).",
+        "Refs are stable for the current page load; after navigation, call browser_get_accessibility_tree to refresh them."
+      ]
 
       lines = if ctx.url, do: lines ++ [" - URL: #{ctx.url}"], else: lines
       lines = if ctx.title, do: lines ++ [" - Title: #{ctx.title}"], else: lines
       lines = if ctx.selection, do: lines ++ [" - Selection: #{ctx.selection}"], else: lines
 
       lines =
-        if ctx.accessibility_tree,
-          do: lines ++ [" - Accessibility Tree:\n#{ctx.accessibility_tree}"],
+        if ctx.viewport,
+          do: lines ++ [" - Viewport: #{inspect(ctx.viewport)}"],
           else: lines
 
       lines =
@@ -98,13 +104,13 @@ defmodule Viber.Runtime.Prompt do
           else: lines
 
       lines =
-        if ctx.dom_snippet,
-          do: lines ++ [" - DOM Snippet:\n#{ctx.dom_snippet}"],
+        if ctx.accessibility_tree,
+          do: lines ++ ["## Accessibility Tree\n#{ctx.accessibility_tree}"],
           else: lines
 
       lines =
-        if ctx.viewport,
-          do: lines ++ [" - Viewport: #{inspect(ctx.viewport)}"],
+        if ctx.dom_snippet,
+          do: lines ++ ["## DOM Snippet\n#{ctx.dom_snippet}"],
           else: lines
 
       Enum.join(lines, "\n")
