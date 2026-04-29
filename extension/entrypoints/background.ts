@@ -1,28 +1,10 @@
 import { MESSAGE_FETCH_LIMIT, SESSION_LIST_LIMIT } from "../lib/shared";
-import type { Message, MessageChunk, SessionSummary } from "../lib/shared";
+import type { Message, SessionSummary } from "../lib/shared";
+import { mapServerMessages } from "../lib/messages";
+import type { ServerMessage } from "../lib/messages";
 
 const VIBER_URL = "http://localhost:4100";
 const SESSION_KEY = "viber_session_id";
-
-type ServerBlock = {
-  type: string;
-  id?: string;
-  tool_use_id?: string;
-  text?: string;
-  name?: string;
-  tool_name?: string;
-  is_error?: boolean;
-};
-
-type ServerMessage = {
-  role: string;
-  blocks: ServerBlock[];
-};
-
-type ToolResultSummary = {
-  toolName?: string;
-  error: boolean;
-};
 
 type SseEvent =
   | { type: "text_delta"; payload: { text: string } }
@@ -108,54 +90,6 @@ async function fetchMessages(id: string): Promise<Message[]> {
   return mapServerMessages(data.messages ?? []);
 }
 
-function mapServerMessages(serverMessages: ServerMessage[]): Message[] {
-  let id = 0;
-  const toolResults = collectToolResults(serverMessages);
-
-  return serverMessages.flatMap((msg) => {
-    if (msg.role !== "user" && msg.role !== "assistant") return [];
-
-    const chunks = msg.blocks.flatMap((block): MessageChunk[] => {
-      if (block.type === "text" && block.text) {
-        return [{ kind: "text", content: block.text }];
-      }
-
-      if (msg.role === "assistant" && block.type === "tool_use") {
-        const result = block.id ? toolResults.get(block.id) : undefined;
-        return [{
-          kind: "action",
-          toolName: result?.toolName ?? block.name ?? "tool",
-          done: true,
-          error: result?.error ?? false,
-        }];
-      }
-
-      return [];
-    });
-
-    if (chunks.length === 0) return [];
-    id += 1;
-    return [{ id: String(id), role: msg.role, chunks }];
-  });
-}
-
-function collectToolResults(serverMessages: ServerMessage[]): Map<string, ToolResultSummary> {
-  const results = new Map<string, ToolResultSummary>();
-
-  for (const msg of serverMessages) {
-    for (const block of msg.blocks) {
-      if (block.type === "tool_result" && block.tool_use_id) {
-        results.set(block.tool_use_id, {
-          toolName: block.name ?? block.tool_name,
-          error: block.is_error ?? false,
-        });
-      }
-    }
-  }
-
-  return results;
-}
-
 async function captureContext(tabId: number): Promise<Record<string, unknown>> {
   try {
     const results = await browser.scripting.executeScript({
@@ -236,8 +170,34 @@ async function respondToPermission(
   if (!res.ok) throw new Error(`Permission response failed: ${res.status}`);
 }
 
-function broadcastToPopup(message: Record<string, unknown>): void {
-  browser.runtime.sendMessage(message).catch(() => {});
+let streamingState: { active: boolean; sessionId: string | null } = {
+  active: false,
+  sessionId: null,
+};
+
+let missedMessages: Record<string, unknown>[] = [];
+let popupAlive = false;
+let bufferOverflowed = false;
+
+const MAX_BUFFERED = 500;
+
+function bufferMessage(message: Record<string, unknown>): void {
+  if (missedMessages.length < MAX_BUFFERED) {
+    missedMessages.push(message);
+  } else {
+    bufferOverflowed = true;
+  }
+}
+
+function broadcastOrBuffer(message: Record<string, unknown>): void {
+  if (popupAlive) {
+    browser.runtime.sendMessage(message).catch(() => {
+      bufferMessage(message);
+      popupAlive = false;
+    });
+  } else {
+    bufferMessage(message);
+  }
 }
 
 async function sendMessage(
@@ -259,48 +219,64 @@ async function sendMessage(
       }),
     });
   } catch (e) {
-    broadcastToPopup({ type: "ERROR", message: `Cannot reach Viber server: ${String(e)}` });
+    broadcastOrBuffer({ type: "ERROR", message: `Cannot reach Viber server: ${String(e)}` });
     return;
   }
 
   if (!response.ok || !response.body) {
-    broadcastToPopup({ type: "ERROR", message: `HTTP ${response.status}` });
+    broadcastOrBuffer({ type: "ERROR", message: `HTTP ${response.status}` });
     return;
   }
 
-  broadcastToPopup({ type: "STREAM_START" });
+  streamingState = { active: true, sessionId };
+  broadcastOrBuffer({ type: "STREAM_START" });
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  let receivedTerminal = false;
 
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    for (const frame of frames) {
-      let eventType = "";
-      let dataLine = "";
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
 
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          dataLine = line.slice(6).trim();
+      for (const frame of frames) {
+        let eventType = "";
+        const dataLines: string[] = [];
+
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            dataLines.push(line.slice(6));
+          }
+        }
+
+        const dataLine = dataLines.join("\n").trim();
+        if (eventType && dataLine) {
+          try {
+            const evt = JSON.parse(dataLine) as SseEvent;
+            if (evt.type === "turn_complete" || evt.type === "error" || evt.type === "interrupted") {
+              receivedTerminal = true;
+            }
+            await handleSseEvent(evt, sessionId, tabId ?? null);
+          } catch {
+          }
         }
       }
-
-      if (eventType && dataLine) {
-        try {
-          const evt = JSON.parse(dataLine) as SseEvent;
-          await handleSseEvent(evt, sessionId, tabId ?? null);
-        } catch {
-        }
-      }
+    }
+  } catch (e) {
+    broadcastOrBuffer({ type: "ERROR", message: `Stream disconnected: ${String(e)}` });
+  } finally {
+    if (!receivedTerminal) {
+      streamingState = { active: false, sessionId: null };
+      broadcastOrBuffer({ type: "TURN_COMPLETE", usage: null });
     }
   }
 }
@@ -312,19 +288,44 @@ async function handleSseEvent(
 ): Promise<void> {
   switch (evt.type) {
     case "text_delta":
-      broadcastToPopup({ type: "STREAM_DELTA", text: evt.payload.text });
+      broadcastOrBuffer({ type: "STREAM_DELTA", text: evt.payload.text });
       break;
 
-    case "turn_complete":
-      broadcastToPopup({ type: "TURN_COMPLETE" });
+    case "thinking_delta":
+      broadcastOrBuffer({ type: "THINKING_DELTA", text: evt.payload.text });
       break;
+
+    case "tool_use_start": {
+      const { name, id } = evt.payload as { name: string; id: string };
+      broadcastOrBuffer({ type: "TOOL_USE_START", toolName: name, toolId: id });
+      break;
+    }
+
+    case "tool_result": {
+      const { name, id, is_error } = evt.payload as {
+        name: string;
+        id: string;
+        is_error: boolean;
+      };
+      broadcastOrBuffer({ type: "TOOL_RESULT", toolName: name, toolId: id, isError: is_error });
+      break;
+    }
+
+    case "turn_complete": {
+      streamingState = { active: false, sessionId: null };
+      const usage = (evt.payload as { usage?: Record<string, number> }).usage ?? null;
+      broadcastOrBuffer({ type: "TURN_COMPLETE", usage });
+      break;
+    }
 
     case "error":
-      broadcastToPopup({ type: "ERROR", message: evt.payload.message });
+      streamingState = { active: false, sessionId: null };
+      broadcastOrBuffer({ type: "ERROR", message: evt.payload.message });
       break;
 
     case "interrupted":
-      broadcastToPopup({ type: "INTERRUPTED" });
+      streamingState = { active: false, sessionId: null };
+      broadcastOrBuffer({ type: "INTERRUPTED" });
       break;
 
     case "permission_request": {
@@ -333,7 +334,7 @@ async function handleSseEvent(
         tool: string;
         input: string;
       };
-      broadcastToPopup({ type: "PERMISSION_REQUEST", requestId: request_id, tool, input });
+      broadcastOrBuffer({ type: "PERMISSION_REQUEST", requestId: request_id, tool, input });
       break;
     }
 
@@ -343,7 +344,7 @@ async function handleSseEvent(
         tool_name: string;
         input: Record<string, unknown>;
       };
-      broadcastToPopup({ type: "BROWSER_ACTION_START", toolName: tool_name, input });
+      broadcastOrBuffer({ type: "BROWSER_ACTION_START", toolName: tool_name, input });
 
       let result: { output: string; is_error: boolean };
       if (tabId !== null) {
@@ -353,7 +354,7 @@ async function handleSseEvent(
       }
 
       await postActionResult(sessionId, action_id, result);
-      broadcastToPopup({ type: "BROWSER_ACTION_DONE", toolName: tool_name, result });
+      broadcastOrBuffer({ type: "BROWSER_ACTION_DONE", toolName: tool_name, result });
       break;
     }
 
@@ -366,6 +367,51 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(
     (rawMsg: unknown, _sender, sendResponse) => {
       const msg = rawMsg as Record<string, unknown>;
+
+      if (msg.type === "POPUP_OPENED") {
+        popupAlive = true;
+        const pending = missedMessages;
+        const overflowed = bufferOverflowed;
+        missedMessages = [];
+        bufferOverflowed = false;
+        sendResponse({
+          ok: true,
+          streaming: streamingState.active,
+          missedMessages: pending,
+          bufferOverflowed: overflowed,
+        });
+        return true;
+      }
+
+      if (msg.type === "POPUP_CLOSED") {
+        popupAlive = false;
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      if (msg.type === "SYNC_MESSAGES") {
+        getCurrentSessionId()
+          .then(async (sessionId) => {
+            if (!sessionId) {
+              sendResponse({ ok: true, messages: [], sessionId: null });
+              return;
+            }
+            const [messages, info] = await Promise.all([
+              fetchMessages(sessionId),
+              fetchSessionInfo(sessionId),
+            ]);
+            sendResponse({
+              ok: true,
+              messages,
+              sessionId,
+              model: info?.model ?? null,
+              usage: info?.usage ?? null,
+            });
+          })
+          .catch((error) => sendResponse({ ok: false, error: String(error) }));
+        return true;
+      }
+
       if (msg.type === "USER_MESSAGE") {
         const text = msg.text as string;
         const browserContext = (msg.browserContext ?? {}) as Record<string, unknown>;

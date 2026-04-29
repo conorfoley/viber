@@ -1,14 +1,23 @@
 <script lang="ts">
-  import { afterUpdate } from "svelte";
+  import { afterUpdate, beforeUpdate } from "svelte";
   import type { Message } from "../stores/conversation";
   import MessageBubble from "./MessageBubble.svelte";
 
   export let messages: Message[];
 
   let listEl: HTMLElement;
+  let shouldAutoScroll = true;
+
+  beforeUpdate(() => {
+    if (listEl) {
+      const threshold = 60;
+      shouldAutoScroll =
+        listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - threshold;
+    }
+  });
 
   afterUpdate(() => {
-    if (listEl) {
+    if (listEl && shouldAutoScroll) {
       listEl.scrollTop = listEl.scrollHeight;
     }
   });

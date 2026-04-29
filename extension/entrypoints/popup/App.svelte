@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import MessageList from "./components/MessageList.svelte";
   import InputBar from "./components/InputBar.svelte";
   import ActionStatus from "./components/ActionStatus.svelte";
@@ -7,13 +8,17 @@
     messages,
     status,
     currentAction,
+    sessionUsage,
+    sessionModel,
     addUserMessage,
     startAssistantMessage,
     appendDelta,
     appendAction,
+    appendThinking,
+    appendToolUse,
     setMessages,
   } from "./stores/conversation";
-  import type { Message, SessionSummary, UserMessageResponse } from "../../lib/shared";
+  import type { Message, SessionSummary, UserMessageResponse, UsageInfo } from "../../lib/shared";
 
   type ListSessionsResponse = {
     ok: boolean;
@@ -35,6 +40,8 @@
   let recentSessions: SessionSummary[] = [];
   let currentSessionId: string | null = null;
   let pendingPermission: { requestId: string; tool: string; input: string } | null = null;
+  let syncing = true;
+  let activeToolCount = 0;
 
   function ensureAssistantMsg(): void {
     if (!assistantMsgId) {
@@ -46,12 +53,43 @@
     switch (msg.type) {
       case "STREAM_START":
         status.set("thinking");
-        assistantMsgId = startAssistantMessage();
+        if (!assistantMsgId) {
+          assistantMsgId = startAssistantMessage();
+        }
         break;
 
       case "STREAM_DELTA":
         ensureAssistantMsg();
         appendDelta(assistantMsgId, msg.text as string);
+        break;
+
+      case "THINKING_DELTA":
+        ensureAssistantMsg();
+        appendThinking(assistantMsgId, msg.text as string);
+        break;
+
+      case "TOOL_USE_START":
+        ensureAssistantMsg();
+        activeToolCount++;
+        status.set("acting");
+        currentAction.set(msg.toolName as string);
+        appendToolUse(assistantMsgId, msg.toolName as string, msg.toolId as string, false);
+        break;
+
+      case "TOOL_RESULT":
+        ensureAssistantMsg();
+        activeToolCount = Math.max(0, activeToolCount - 1);
+        appendToolUse(
+          assistantMsgId,
+          msg.toolName as string,
+          msg.toolId as string,
+          true,
+          msg.isError as boolean
+        );
+        if (activeToolCount === 0) {
+          status.set("thinking");
+          currentAction.set(null);
+        }
         break;
 
       case "BROWSER_ACTION_START":
@@ -73,10 +111,22 @@
         break;
 
       case "TURN_COMPLETE":
+        if (msg.usage) {
+          sessionUsage.set(msg.usage as UsageInfo);
+        }
+        status.set("idle");
+        currentAction.set(null);
+        pendingPermission = null;
+        assistantMsgId = "";
+        activeToolCount = 0;
+        break;
+
       case "INTERRUPTED":
         status.set("idle");
         currentAction.set(null);
         pendingPermission = null;
+        assistantMsgId = "";
+        activeToolCount = 0;
         break;
 
       case "PERMISSION_REQUEST":
@@ -90,10 +140,12 @@
 
       case "ERROR":
         ensureAssistantMsg();
+        appendDelta(assistantMsgId, `\n\n⚠ ${msg.message as string}`);
+        assistantMsgId = "";
         status.set("idle");
         currentAction.set(null);
         pendingPermission = null;
-        appendDelta(assistantMsgId, `\n\n⚠ ${msg.message as string}`);
+        activeToolCount = 0;
         break;
     }
   }
@@ -103,12 +155,64 @@
       handleBackground(msg as Record<string, unknown>);
     };
     browser.runtime.onMessage.addListener(listener);
-    browser.runtime.sendMessage({ type: "GET_CURRENT_SESSION" }).then((response) => {
-      currentSessionId = (response as { sessionId?: string | null })?.sessionId ?? null;
-    }).catch(() => {
-      currentSessionId = null;
-    });
+
+    browser.runtime.sendMessage({ type: "POPUP_OPENED" }).then(async (response) => {
+      const res = response as {
+        ok: boolean;
+        streaming: boolean;
+        missedMessages: Record<string, unknown>[];
+        bufferOverflowed: boolean;
+      };
+
+      const missed = res.missedMessages ?? [];
+      const forceFullSync = res.bufferOverflowed;
+
+      try {
+        const syncRes = await browser.runtime.sendMessage({ type: "SYNC_MESSAGES" }) as {
+          ok: boolean;
+          messages?: Message[];
+          sessionId?: string | null;
+          model?: string | null;
+          usage?: UsageInfo | null;
+        };
+        if (syncRes.ok && syncRes.messages) {
+          if (!res.streaming || forceFullSync) {
+            setMessages(syncRes.messages);
+          }
+          currentSessionId = syncRes.sessionId ?? null;
+          if (syncRes.model) sessionModel.set(syncRes.model);
+          if (syncRes.usage) sessionUsage.set(syncRes.usage);
+        }
+      } catch {
+        currentSessionId = null;
+      } finally {
+        syncing = false;
+      }
+
+      if (res.streaming) {
+        status.set("thinking");
+
+        if (!forceFullSync) {
+          const hasStart = missed.some((m) => m.type === "STREAM_START");
+          if (!hasStart) {
+            const existing = [...get(messages)].reverse().find((m) => m.role === "assistant");
+            assistantMsgId = existing?.id ?? "";
+          }
+          for (const msg of missed) {
+            handleBackground(msg);
+          }
+        } else {
+          const existing = [...get(messages)].reverse().find((m) => m.role === "assistant");
+          assistantMsgId = existing?.id ?? "";
+        }
+      }
+    }).catch(() => { syncing = false; });
+
     return () => browser.runtime.onMessage.removeListener(listener);
+  });
+
+  onDestroy(() => {
+    browser.runtime.sendMessage({ type: "POPUP_CLOSED" }).catch(() => {});
   });
 
   async function newSession(): Promise<void> {
@@ -125,6 +229,8 @@
       sessionsOpen = false;
       status.set("idle");
       currentAction.set(null);
+      sessionUsage.set(null);
+      sessionModel.set(null);
     } catch (error) {
       console.error("Failed to create new session:", error);
     }
@@ -177,6 +283,16 @@
       sessionsOpen = false;
       status.set("idle");
       currentAction.set(null);
+      sessionUsage.set(null);
+      sessionModel.set(null);
+
+      browser.runtime.sendMessage({ type: "SYNC_MESSAGES" }).then((syncRes) => {
+        const res = syncRes as { ok: boolean; model?: string | null; usage?: UsageInfo | null };
+        if (res.ok) {
+          if (res.model) sessionModel.set(res.model);
+          if (res.usage) sessionUsage.set(res.usage);
+        }
+      }).catch(() => {});
     } catch (error) {
       sessionsError = String(error);
     } finally {
@@ -196,8 +312,9 @@
       decision,
     }).catch((error) => {
       ensureAssistantMsg();
-      status.set("idle");
       appendDelta(assistantMsgId, `\n\n⚠ ${String(error)}`);
+      assistantMsgId = "";
+      status.set("idle");
     });
   }
 
@@ -222,13 +339,15 @@
         currentSessionId = result.sessionId;
       } else if (!result.ok) {
         ensureAssistantMsg();
-        status.set("idle");
         appendDelta(assistantMsgId, `\n\n⚠ ${result.error ?? "Failed to send message"}`);
+        assistantMsgId = "";
+        status.set("idle");
       }
     }).catch((error) => {
       ensureAssistantMsg();
-      status.set("idle");
       appendDelta(assistantMsgId, `\n\n⚠ ${String(error)}`);
+      assistantMsgId = "";
+      status.set("idle");
     });
   }
 
@@ -251,6 +370,12 @@
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  function formatTokens(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return String(n);
   }
 </script>
 
@@ -318,7 +443,21 @@
     </section>
   {/if}
 
-  <InputBar disabled={$status !== "idle"} on:send={handleSend} />
+  {#if $sessionModel || $sessionUsage}
+    <div class="info-bar">
+      {#if $sessionModel}
+        <span class="info-model">{$sessionModel}</span>
+      {/if}
+      {#if $sessionUsage}
+        <span class="info-tokens" title="Input: {$sessionUsage.input_tokens.toLocaleString()} | Output: {$sessionUsage.output_tokens.toLocaleString()} | Cache read: {$sessionUsage.cache_read_tokens.toLocaleString()} | Cache write: {$sessionUsage.cache_creation_tokens.toLocaleString()}">
+          {formatTokens($sessionUsage.total_tokens)} tokens
+        </span>
+        <span class="info-turns">{$sessionUsage.turns} {$sessionUsage.turns === 1 ? "turn" : "turns"}</span>
+      {/if}
+    </div>
+  {/if}
+
+  <InputBar disabled={$status !== "idle" || syncing} on:send={handleSend} />
 </main>
 
 <style>
@@ -597,5 +736,30 @@
   .perm-always:hover {
     background: #152030;
     border-color: #3a5a7a;
+  }
+
+  .info-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 14px;
+    background: #141414;
+    border-top: 1px solid #222;
+    font-size: 10px;
+    color: #666;
+    flex-shrink: 0;
+  }
+
+  .info-model {
+    color: #888;
+    font-weight: 600;
+  }
+
+  .info-tokens {
+    cursor: help;
+  }
+
+  .info-turns {
+    margin-left: auto;
   }
 </style>

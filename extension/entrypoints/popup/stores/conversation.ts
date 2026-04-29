@@ -1,5 +1,5 @@
 import { writable } from "svelte/store";
-import type { Message } from "../../../lib/shared";
+import type { Message, UsageInfo } from "../../../lib/shared";
 
 export type { MessageRole, MessageChunk, Message } from "../../../lib/shared";
 
@@ -10,6 +10,8 @@ const STORAGE_KEY = "viber_conversation";
 export const messages = writable<Message[]>([]);
 export const status = writable<Status>("idle");
 export const currentAction = writable<string | null>(null);
+export const sessionUsage = writable<UsageInfo | null>(null);
+export const sessionModel = writable<string | null>(null);
 
 let msgIdCounter = 0;
 
@@ -85,6 +87,46 @@ export function appendAction(
         chunks[lastIdx] = { kind: "action", toolName, done, error };
       } else {
         chunks.push({ kind: "action", toolName, done, error });
+      }
+      return { ...msg, chunks };
+    })
+  );
+}
+
+export function appendThinking(id: string, text: string): void {
+  messages.update((list) =>
+    list.map((msg) => {
+      if (msg.id !== id) return msg;
+      const chunks = [...msg.chunks];
+      const last = chunks[chunks.length - 1];
+      if (last?.kind === "thinking") {
+        chunks[chunks.length - 1] = { kind: "thinking", content: last.content + text };
+      } else {
+        chunks.push({ kind: "thinking", content: text });
+      }
+      return { ...msg, chunks };
+    })
+  );
+}
+
+export function appendToolUse(
+  id: string,
+  toolName: string,
+  toolId: string,
+  done: boolean,
+  error = false
+): void {
+  messages.update((list) =>
+    list.map((msg) => {
+      if (msg.id !== id) return msg;
+      const chunks = [...msg.chunks];
+      const existing = chunks.findIndex(
+        (c) => c.kind === "tool" && c.toolId === toolId
+      );
+      if (existing >= 0) {
+        chunks[existing] = { kind: "tool", toolName, toolId, done, error };
+      } else {
+        chunks.push({ kind: "tool", toolName, toolId, done, error });
       }
       return { ...msg, chunks };
     })
