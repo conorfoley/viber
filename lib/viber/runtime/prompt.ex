@@ -3,7 +3,7 @@ defmodule Viber.Runtime.Prompt do
   System prompt builder assembling sections into a complete LLM instruction set.
   """
 
-  alias Viber.Runtime.{Bootstrap, Permissions}
+  alias Viber.Runtime.{Bootstrap, Permissions, Skills}
   alias Viber.Tools.Registry
 
   @chars_per_token 4
@@ -27,6 +27,7 @@ defmodule Viber.Runtime.Prompt do
       browser_context_section(browser_context),
       tool_instructions_section(),
       tools_section(),
+      skills_section(project_root),
       project_context_section(project_root),
       permission_section(permission_mode),
       config_section(config),
@@ -48,7 +49,9 @@ defmodule Viber.Runtime.Prompt do
 
   defp environment_section(project_root) do
     {os_name, os_version} = detect_os()
-    date = Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d %H:%M:%S UTC")
+    # Day granularity only: a per-second timestamp would silently invalidate
+    # the provider prompt cache on every turn.
+    date = Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d")
     stack = Bootstrap.detect_stack(project_root)
 
     lines = [
@@ -128,9 +131,36 @@ defmodule Viber.Runtime.Prompt do
       " - Use the appropriate tool for each task",
       " - Prefer searching (grep/glob) over reading entire directories",
       " - Write minimal, targeted changes when editing files",
-      " - Check for errors after making changes"
+      " - Check for errors after making changes",
+      " - Delegate independent or read-heavy subtasks to spawn_agent workers " <>
+        "(effort \"low\" for simple scouting) to keep your own context focused",
+      " - Before declaring a substantial multi-step task done, spawn_agent with " <>
+        "role \"reviewer\" for an independent verdict on the result — the reviewer " <>
+        "gathers its own evidence and may contradict your own assessment"
     ]
     |> Enum.join("\n")
+  end
+
+  defp skills_section(project_root) do
+    case Skills.discover(project_root) do
+      [] ->
+        nil
+
+      skills ->
+        lines =
+          Enum.map(skills, fn skill ->
+            " - #{skill.name}: #{skill.description}"
+          end)
+
+        [
+          "# Skills",
+          "Reusable instruction packages installed in this project. When a task " <>
+            "matches a skill's description, load its full instructions with the " <>
+            "`skill` tool before starting, and follow them."
+          | lines
+        ]
+        |> Enum.join("\n")
+    end
   end
 
   defp tools_section do

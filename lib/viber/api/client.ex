@@ -11,9 +11,10 @@ defmodule Viber.API.Client do
   @type provider_kind :: :anthropic | :openai | :xai | :ollama
 
   @model_aliases %{
-    "opus" => "claude-opus-4-6",
-    "sonnet" => "claude-sonnet-4-6",
-    "haiku" => "claude-haiku-4-5-20251213",
+    "fable" => "claude-fable-5",
+    "opus" => "claude-opus-5",
+    "sonnet" => "claude-sonnet-5",
+    "haiku" => "claude-haiku-4-5",
     "grok" => "grok-3",
     "grok-mini" => "grok-3-mini",
     "gpt4o" => "gpt-4o",
@@ -80,6 +81,10 @@ defmodule Viber.API.Client do
   end
 
   @model_max_tokens %{
+    "claude-fable-5" => 64_000,
+    "claude-opus-5" => 64_000,
+    "claude-sonnet-5" => 64_000,
+    "claude-haiku-4-5" => 64_000,
     "claude-opus-4-6" => 32_000,
     "claude-sonnet-4-6" => 64_000,
     "claude-haiku-4-5-20251213" => 64_000,
@@ -103,6 +108,77 @@ defmodule Viber.API.Client do
       true ->
         Map.get(@model_max_tokens, canonical, 64_000)
     end
+  end
+
+  @adaptive_thinking_summarized ~w[
+    claude-fable-5
+    claude-mythos
+    claude-opus-5
+    claude-opus-4-8
+    claude-opus-4-7
+    claude-sonnet-5
+  ]
+
+  @adaptive_thinking_basic ~w[claude-opus-4-6 claude-sonnet-4-6]
+
+  @effort_levels ~w[low medium high xhigh max]
+
+  @doc """
+  Returns the effort levels accepted by `output_config/2`.
+  """
+  @spec effort_levels() :: [String.t()]
+  def effort_levels, do: @effort_levels
+
+  @doc """
+  Returns the `thinking` request parameter for a model, or `nil` when the
+  model does not support adaptive thinking.
+
+  Models with an omitted-by-default thinking display get
+  `display: "summarized"` so reasoning can be streamed to the user.
+  """
+  @spec thinking_config(String.t()) :: map() | nil
+  def thinking_config(model) do
+    canonical = resolve_model_alias(model)
+
+    cond do
+      prefix_match?(canonical, @adaptive_thinking_summarized) ->
+        %{type: "adaptive", display: "summarized"}
+
+      prefix_match?(canonical, @adaptive_thinking_basic) ->
+        %{type: "adaptive"}
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
+  Returns the `output_config` request parameter carrying the effort level,
+  or `nil` when no effort is requested or the model does not support it.
+  """
+  @spec output_config(String.t(), String.t() | nil) :: map() | nil
+  def output_config(_model, nil), do: nil
+
+  def output_config(model, effort) when is_binary(effort) do
+    canonical = resolve_model_alias(model)
+
+    cond do
+      effort not in @effort_levels ->
+        nil
+
+      prefix_match?(canonical, @adaptive_thinking_summarized) ->
+        %{effort: effort}
+
+      prefix_match?(canonical, @adaptive_thinking_basic) ->
+        %{effort: if(effort == "xhigh", do: "high", else: effort)}
+
+      true ->
+        nil
+    end
+  end
+
+  defp prefix_match?(model, prefixes) do
+    Enum.any?(prefixes, &String.starts_with?(model, &1))
   end
 
   @spec from_model(String.t()) :: {:ok, provider_kind(), module()}

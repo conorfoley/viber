@@ -1,15 +1,21 @@
 defmodule Viber.API.MessageRequest do
   @moduledoc """
   A request to the LLM messages API.
+
+  `system` may be a plain string or a list of content blocks (used by the
+  Anthropic provider to attach `cache_control` breakpoints). `thinking` and
+  `output_config` are Anthropic-specific and ignored by other providers.
   """
 
   @type t :: %__MODULE__{
           model: String.t(),
           max_tokens: pos_integer() | nil,
           messages: [Viber.API.InputMessage.t()],
-          system: String.t() | nil,
+          system: String.t() | [map()] | nil,
           tools: [Viber.API.ToolDefinition.t()] | nil,
           tool_choice: atom() | {:tool, String.t()} | nil,
+          thinking: map() | nil,
+          output_config: map() | nil,
           stream: boolean(),
           provider_overrides: map()
         }
@@ -22,6 +28,8 @@ defmodule Viber.API.MessageRequest do
     :system,
     :tools,
     :tool_choice,
+    :thinking,
+    :output_config,
     stream: false,
     provider_overrides: %{}
   ]
@@ -37,6 +45,8 @@ defimpl Jason.Encoder, for: Viber.API.MessageRequest do
     map = if req.system, do: Map.put(map, :system, req.system), else: map
     map = if req.tools, do: Map.put(map, :tools, req.tools), else: map
     map = if req.stream, do: Map.put(map, :stream, true), else: map
+    map = if req.thinking, do: Map.put(map, :thinking, req.thinking), else: map
+    map = if req.output_config, do: Map.put(map, :output_config, req.output_config), else: map
 
     map =
       if req.tool_choice do

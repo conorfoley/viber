@@ -24,7 +24,7 @@ Eight domains under `lib/viber/`:
 - **CLI** — `Main` escript entry point, interactive REPL, terminal renderer, `init` scaffolding.
 - **Commands** — Slash-command system: parser, registry, handlers (`/help`, `/model`, `/compact`, `/config`, `/clear`, `/status`, `/attach`, `/bug`, `/connect`, `/databases`, `/init`, `/reload`, `/resume`).
 - **Database** — `ConnectionManager` for named MySQL/PostgreSQL connections, `AuditLogger` for query logging, `QueryLog` for structured log entries.
-- **Runtime** — `Session` (GenServer per conversation), `Conversation` (turn loop + tool execution with `Context` and `StreamAccumulator`), `Prompt` (system prompt builder), `Permissions` (mode ladder), `Usage` tracking, `Compaction`, `Bootstrap` (startup orchestration), `FileRefs` (attached file tracking), `SessionStore` (persistence), `Config` (layered configuration).
+- **Runtime** — `Session` (GenServer per conversation), `Conversation` (turn loop + tool execution with `Context` and `StreamAccumulator`), `Prompt` (system prompt builder), `Permissions` (mode ladder), `Usage` tracking, `Compaction`, `Bootstrap` (startup orchestration), `FileRefs` (attached file tracking), `SessionStore` (persistence), `Config` (layered configuration), `SubAgent` (isolated worker/reviewer child agents), `Skills` (progressive-disclosure instruction packages from `.viber/skills/`).
 - **Scheduler** — Quantum-based cron job system: `Runner` executes jobs (SQL queries, shell scripts, health checks), `JobStore` persists jobs, `AlertSink` dispatches notifications (Slack webhook, file, log).
 - **Server** — HTTP/SSE server for programmatic access, session handler, SSE streaming.
 - **Tools** — `Spec` (tool definition + dynamic permissions via `permission_fn`), `Registry`, `Executor`, built-in tools, MCP client/server integration.
@@ -37,7 +37,15 @@ Five modes: `:read_only` < `:workspace_write` < `:danger_full_access`, plus `:pr
 Tools declare a static `permission` level. Tools may also provide a `permission_fn` that inspects the input to return a dynamic permission — e.g., the `git` tool returns `:read_only` for `status`/`log`/`diff` but `:workspace_write` for `commit`/`checkout`. Similarly, `mysql_query` escalates to `:danger_full_access` for write queries but stays `:read_only` for SELECTs. The `scheduler` tool uses the same pattern for list/history (read) vs create/delete (write).
 
 ## Built-in Tools
-`bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`, `glob_search`, `grep_search`, `ls`, `web_fetch`, `test_runner`, `diagnostics`, `formatter`, `mix_task`, `git`, `clipboard`, `jq`, `user_input`, `ecto_schema_inspector`, `mysql_query`, `mysql_schema`, `mysql_explain`, `data_export`, `data_transform`, `scheduler`
+`bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`, `glob_search`, `grep_search`, `ls`, `spawn_agent`, `skill`, `web_fetch`, `test_runner`, `diagnostics`, `formatter`, `mix_task`, `git`, `clipboard`, `jq`, `user_input`, `ecto_schema_inspector`, `mysql_query`, `mysql_schema`, `mysql_explain`, `data_export`, `data_transform`, `scheduler`
+
+## LLM Features
+- **Models**: aliases `fable` → `claude-fable-5`, `opus` → `claude-opus-5`, `sonnet` → `claude-sonnet-5`, `haiku` → `claude-haiku-4-5` (see `Viber.API.Client`). OpenAI-compatible and Ollama models are also supported.
+- **Adaptive thinking**: `thinking: {type: "adaptive"}` is sent automatically on models that support it (Fable 5, Opus 5/4.8/4.7/4.6, Sonnet 5/4.6), with `display: "summarized"` where thinking is omitted by default. Thinking blocks (and signatures) are accumulated from the stream, persisted, and replayed on subsequent turns.
+- **Effort**: `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`) set via the `effort` config key or per-sub-agent; `xhigh` is clamped to `high` on the 4.6 family.
+- **Prompt caching**: the Anthropic provider automatically attaches `cache_control` breakpoints to the system prompt and the last message block. The system prompt is kept byte-stable across turns (day-granularity date) so the cache actually hits.
+- **Sub-agents**: `spawn_agent` runs isolated child agents in parallel. `role: "worker"` (default) delegates tasks; `role: "reviewer"` performs an Oligarchy-style independent post-run review — it gathers its own evidence and ends with `VERDICT: passed|failed`, which may contradict the worker. Use `effort: "low"` for cheap scouting.
+- **Skills**: instruction packages in `.viber/skills/<name>/SKILL.md` (optional `---` frontmatter with `name:`/`description:`). Only name + description are placed in the system prompt; the `skill` tool loads full instructions on demand.
 
 ## Slash Commands
 `/help`, `/model`, `/compact`, `/config`, `/clear`, `/status`, `/attach`, `/bug`, `/connect`, `/databases`, `/init`, `/reload`, `/resume`
@@ -56,6 +64,8 @@ Tools declare a static `permission` level. Tools may also provide a `permission_
 - `lib/viber/runtime/permissions.ex` — Permission mode ladder and policy checking.
 - `lib/viber/runtime/config.ex` — Layered configuration (defaults, project `.viber.json`, env vars).
 - `lib/viber/runtime/session_store.ex` — Session persistence and resumption.
+- `lib/viber/runtime/sub_agent.ex` — Isolated worker/reviewer sub-agents with per-agent effort.
+- `lib/viber/runtime/skills.ex` — Skill discovery and loading from `.viber/skills/`.
 - `lib/viber/tools/registry.ex` — All built-in tool specs with schemas, permissions, and handlers.
 - `lib/viber/tools/spec.ex` — Tool spec struct including optional `permission_fn` for input-dependent permissions.
 - `lib/viber/tools/executor.ex` — Dispatches tool calls to handlers.

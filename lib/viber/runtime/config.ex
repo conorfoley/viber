@@ -24,6 +24,7 @@ defmodule Viber.Runtime.Config do
           api_key: String.t() | nil,
           permission_mode: atom() | nil,
           max_iterations: pos_integer() | nil,
+          effort: String.t() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
           custom_instructions: String.t() | nil,
@@ -36,6 +37,7 @@ defmodule Viber.Runtime.Config do
             api_key: nil,
             permission_mode: nil,
             max_iterations: nil,
+            effort: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
             custom_instructions: nil,
@@ -70,6 +72,7 @@ defmodule Viber.Runtime.Config do
       api_key: override.api_key || base.api_key,
       permission_mode: override.permission_mode || base.permission_mode,
       max_iterations: override.max_iterations || base.max_iterations,
+      effort: override.effort || base.effort,
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
       hooks: %{
         pre_tool_use: base.hooks.pre_tool_use ++ override.hooks.pre_tool_use,
@@ -116,6 +119,7 @@ defmodule Viber.Runtime.Config do
       ["permissionMode"] -> config.permission_mode
       ["customInstructions"] -> config.custom_instructions
       ["maxIterations"] -> config.max_iterations
+      ["effort"] -> config.effort
       ["mcpServers"] -> config.mcp_servers
       ["mcpServers", name] -> Map.get(config.mcp_servers, name)
       ["hooks"] -> config.hooks
@@ -155,6 +159,7 @@ defmodule Viber.Runtime.Config do
       api_key: data["apiKey"],
       permission_mode: parse_permission_mode(data["permissions"]),
       max_iterations: parse_max_iterations(data["maxIterations"]),
+      effort: parse_effort(data["effort"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),
       custom_instructions: data["customInstructions"],
@@ -208,4 +213,9 @@ defmodule Viber.Runtime.Config do
 
   defp parse_max_iterations(val) when is_integer(val) and val > 0, do: val
   defp parse_max_iterations(_), do: nil
+
+  @effort_levels ~w[low medium high xhigh max]
+
+  defp parse_effort(val) when val in @effort_levels, do: val
+  defp parse_effort(_), do: nil
 end

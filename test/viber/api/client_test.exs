@@ -4,9 +4,10 @@ defmodule Viber.API.ClientTest do
   alias Viber.API.{Client, Error, InputMessage, MessageRequest, MessageResponse, Usage}
 
   test "resolves model aliases" do
-    assert Client.resolve_model_alias("opus") == "claude-opus-4-6"
-    assert Client.resolve_model_alias("sonnet") == "claude-sonnet-4-6"
-    assert Client.resolve_model_alias("haiku") == "claude-haiku-4-5-20251213"
+    assert Client.resolve_model_alias("fable") == "claude-fable-5"
+    assert Client.resolve_model_alias("opus") == "claude-opus-5"
+    assert Client.resolve_model_alias("sonnet") == "claude-sonnet-5"
+    assert Client.resolve_model_alias("haiku") == "claude-haiku-4-5"
     assert Client.resolve_model_alias("grok") == "grok-3"
     assert Client.resolve_model_alias("grok-mini") == "grok-3-mini"
     assert Client.resolve_model_alias("claude-sonnet-4-6") == "claude-sonnet-4-6"
@@ -74,9 +75,11 @@ defmodule Viber.API.ClientTest do
   end
 
   test "max_tokens_for_model returns correct limits per model" do
-    assert Client.max_tokens_for_model("opus") == 32_000
+    assert Client.max_tokens_for_model("fable") == 64_000
+    assert Client.max_tokens_for_model("opus") == 64_000
     assert Client.max_tokens_for_model("sonnet") == 64_000
     assert Client.max_tokens_for_model("haiku") == 64_000
+    assert Client.max_tokens_for_model("claude-opus-4-6") == 32_000
     assert Client.max_tokens_for_model("gpt4o") == 16_384
     assert Client.max_tokens_for_model("gpt41") == 32_768
     assert Client.max_tokens_for_model("o3") == 100_000
@@ -87,6 +90,50 @@ defmodule Viber.API.ClientTest do
 
   test "max_tokens_for_model falls back to 64k for unknown non-ollama models" do
     assert Client.max_tokens_for_model("some-future-model") == 64_000
+  end
+
+  describe "thinking_config/1" do
+    test "adaptive with summarized display for omitted-by-default models" do
+      assert Client.thinking_config("fable") == %{type: "adaptive", display: "summarized"}
+      assert Client.thinking_config("claude-opus-5") == %{type: "adaptive", display: "summarized"}
+
+      assert Client.thinking_config("claude-opus-4-7") == %{
+               type: "adaptive",
+               display: "summarized"
+             }
+
+      assert Client.thinking_config("sonnet") == %{type: "adaptive", display: "summarized"}
+    end
+
+    test "plain adaptive for the 4.6 family" do
+      assert Client.thinking_config("claude-opus-4-6") == %{type: "adaptive"}
+      assert Client.thinking_config("claude-sonnet-4-6") == %{type: "adaptive"}
+    end
+
+    test "nil for models without adaptive thinking" do
+      assert Client.thinking_config("haiku") == nil
+      assert Client.thinking_config("gpt-4o") == nil
+      assert Client.thinking_config("ollama:llama3") == nil
+    end
+  end
+
+  describe "output_config/2" do
+    test "passes effort through for current models" do
+      assert Client.output_config("claude-opus-5", "low") == %{effort: "low"}
+      assert Client.output_config("fable", "xhigh") == %{effort: "xhigh"}
+    end
+
+    test "clamps xhigh to high on the 4.6 family" do
+      assert Client.output_config("claude-sonnet-4-6", "xhigh") == %{effort: "high"}
+      assert Client.output_config("claude-sonnet-4-6", "max") == %{effort: "max"}
+    end
+
+    test "nil when effort absent, invalid, or model unsupported" do
+      assert Client.output_config("claude-opus-5", nil) == nil
+      assert Client.output_config("claude-opus-5", "extreme") == nil
+      assert Client.output_config("haiku", "low") == nil
+      assert Client.output_config("gpt-4o", "low") == nil
+    end
   end
 
   test "from_model returns provider kind and module" do

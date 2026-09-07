@@ -17,6 +17,7 @@ defmodule Viber.API.Providers.Anthropic do
 
     with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
+      request = apply_cache_control(request)
       Logger.debug("Anthropic send_message: posting to /v1/messages")
 
       case Req.post(req, url: "/v1/messages", json: %{request | stream: false}) do
@@ -47,6 +48,7 @@ defmodule Viber.API.Providers.Anthropic do
 
     with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
+      request = apply_cache_control(request)
       Logger.debug("Anthropic stream_message: posting to /v1/messages (streaming)")
 
       case Req.post(req,
@@ -83,6 +85,53 @@ defmodule Viber.API.Providers.Anthropic do
       end
     end
   end
+
+  @cache_breakpoint %{type: "ephemeral"}
+
+  @doc """
+  Attaches prompt-cache breakpoints so the stable prefix (tools + system) and
+  the accumulated conversation are cached across turns. Uses 2 of the 4
+  allowed breakpoints; a byte-stable system prompt is required for hits.
+  """
+  @spec apply_cache_control(MessageRequest.t()) :: MessageRequest.t()
+  def apply_cache_control(%MessageRequest{} = request) do
+    request
+    |> cache_system()
+    |> cache_last_message()
+  end
+
+  defp cache_system(%MessageRequest{system: system} = request)
+       when is_binary(system) and system != "" do
+    %{request | system: [%{type: "text", text: system, cache_control: @cache_breakpoint}]}
+  end
+
+  defp cache_system(request), do: request
+
+  defp cache_last_message(%MessageRequest{messages: messages} = request)
+       when is_list(messages) and messages != [] do
+    {init, [last]} = Enum.split(messages, -1)
+
+    case mark_last_block(last.content) do
+      {:ok, content} -> %{request | messages: init ++ [%{last | content: content}]}
+      :skip -> request
+    end
+  end
+
+  defp cache_last_message(request), do: request
+
+  defp mark_last_block(content) when is_list(content) and content != [] do
+    {init, [block]} = Enum.split(content, -1)
+
+    case block do
+      %{type: type} when type in ["text", "tool_result"] ->
+        {:ok, init ++ [Map.put(block, :cache_control, @cache_breakpoint)]}
+
+      _ ->
+        :skip
+    end
+  end
+
+  defp mark_last_block(_), do: :skip
 
   defp get_api_key(%MessageRequest{provider_overrides: overrides}) do
     case Map.get(overrides, :api_key) do

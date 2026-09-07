@@ -54,6 +54,7 @@ defmodule Viber.Runtime.Conversation do
       browser_context: req.browser_context,
       interrupt: req.interrupt,
       enabled_toolsets: req.enabled_toolsets,
+      effort: req.effort,
       max_iterations: max_iter
     }
 
@@ -110,12 +111,16 @@ defmodule Viber.Runtime.Conversation do
 
     api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
 
+    resolved_model = Client.resolve_model_alias(ctx.model)
+
     request = %MessageRequest{
-      model: Client.resolve_model_alias(ctx.model),
+      model: resolved_model,
       max_tokens: Client.max_tokens_for_model(ctx.model),
       messages: api_messages,
       system: system_prompt,
       tools: tool_defs,
+      thinking: Client.thinking_config(resolved_model),
+      output_config: Client.output_config(resolved_model, effective_effort(ctx)),
       stream: true
     }
 
@@ -162,9 +167,17 @@ defmodule Viber.Runtime.Conversation do
       end
 
     assistant_blocks =
-      Enum.flat_map(acc.blocks, fn
+      acc.blocks
+      |> Enum.sort_by(fn {idx, _} -> idx end)
+      |> Enum.flat_map(fn
         {_idx, %{type: :text, text: text}} ->
           [{:text, text}]
+
+        {_idx, %{type: :thinking, text: text, signature: signature}} when signature != "" ->
+          [{:thinking, text, signature}]
+
+        {_idx, %{type: :redacted_thinking, data: data}} when data != "" ->
+          [{:redacted_thinking, data}]
 
         {_idx, %{type: :tool_use, id: id, name: name, input: input}} ->
           parsed = parse_tool_input(input)
@@ -502,6 +515,14 @@ defmodule Viber.Runtime.Conversation do
 
   defp block_to_api_content({:text, text}), do: %{type: "text", text: text}
 
+  defp block_to_api_content({:thinking, text, signature}) do
+    %{type: "thinking", thinking: text, signature: signature}
+  end
+
+  defp block_to_api_content({:redacted_thinking, data}) do
+    %{type: "redacted_thinking", data: data}
+  end
+
   defp block_to_api_content({:tool_use, id, name, input}) do
     %{type: "tool_use", id: id, name: name, input: input}
   end
@@ -541,7 +562,10 @@ defmodule Viber.Runtime.Conversation do
           %{type: :tool_use, id: id, name: name, input: ""}
 
         %{type: "thinking"} ->
-          %{type: :thinking, text: ""}
+          %{type: :thinking, text: "", signature: ""}
+
+        %{type: "redacted_thinking"} = b ->
+          %{type: :redacted_thinking, data: Map.get(b, :data) || ""}
 
         _ ->
           %{type: :unknown}
@@ -562,6 +586,12 @@ defmodule Viber.Runtime.Conversation do
       {%{type: :thinking} = block, %{type: "thinking_delta", thinking: text}} ->
         handler.(Event.new(:thinking_delta, %{text: text}))
         %{acc | blocks: Map.put(acc.blocks, idx, %{block | text: block.text <> text})}
+
+      {%{type: :thinking} = block, %{type: "signature_delta", signature: signature}} ->
+        %{
+          acc
+          | blocks: Map.put(acc.blocks, idx, %{block | signature: block.signature <> signature})
+        }
 
       _ ->
         acc
@@ -691,6 +721,14 @@ defmodule Viber.Runtime.Conversation do
     do: val
 
   defp config_max_iterations(_), do: nil
+
+  defp effective_effort(%Context{effort: effort}) when is_binary(effort), do: effort
+
+  defp effective_effort(%Context{config: %Viber.Runtime.Config{effort: effort}})
+       when is_binary(effort),
+       do: effort
+
+  defp effective_effort(_), do: nil
 
   @auto_compact_threshold 80_000
 

@@ -665,6 +665,33 @@ defmodule Viber.Tools.Registry do
       permission_fn: &Builtins.Scheduler.permission_for/1,
       handler: &Builtins.Scheduler.execute/1
     },
+    "skill" => %Spec{
+      name: "skill",
+      toolset: :core,
+      description: """
+      Load the full instructions of a project skill by name.
+      Skills are reusable instruction packages listed in the system prompt
+      (discovered from .viber/skills/<name>/SKILL.md). When a task matches a
+      skill's description, load it with this tool and follow its instructions.
+      """,
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "name" => %{
+            "type" => "string",
+            "description" => "Name of the skill to load"
+          },
+          "project_root" => %{
+            "type" => "string",
+            "description" => "Optional project root override (defaults to the working directory)"
+          }
+        },
+        "required" => ["name"],
+        "additionalProperties" => false
+      },
+      permission: :read_only,
+      handler: &Builtins.Skill.execute/1
+    },
     "spawn_agent" => %Spec{
       name: "spawn_agent",
       toolset: :core,
@@ -672,14 +699,22 @@ defmodule Viber.Tools.Registry do
       Spawn an isolated sub-agent to perform a task and return its response.
       Multiple spawn_agent calls in the same turn run in parallel.
       The sub-agent has full access to all tools and starts with a fresh conversation.
-      Use this to delegate independent work streams (e.g. run tests while editing code).
+      Use role "worker" (default) to delegate independent work streams
+      (e.g. run tests while editing code), and role "reviewer" to get an
+      independent, skeptical verdict on completed work: the reviewer gathers
+      its own evidence and ends with "VERDICT: passed" or "VERDICT: failed",
+      which may contradict the worker's own claims.
+      Use effort "low" for simple scouting or mechanical subtasks and higher
+      levels only for hard reasoning.
       """,
       input_schema: %{
         "type" => "object",
         "properties" => %{
           "task" => %{
             "type" => "string",
-            "description" => "The task for the sub-agent to perform"
+            "description" =>
+              "The task for the sub-agent to perform. For reviewers, describe what " <>
+                "was done and what proof of success should be checked."
           },
           "context" => %{
             "type" => "string",
@@ -688,6 +723,18 @@ defmodule Viber.Tools.Registry do
           "model" => %{
             "type" => "string",
             "description" => "Optional model override (defaults to parent model)"
+          },
+          "role" => %{
+            "type" => "string",
+            "enum" => ["worker", "reviewer"],
+            "description" =>
+              "worker (default) executes a task; reviewer independently verifies " <>
+                "completed work and returns a verdict"
+          },
+          "effort" => %{
+            "type" => "string",
+            "enum" => ["low", "medium", "high", "xhigh", "max"],
+            "description" => "Optional reasoning effort for the sub-agent"
           }
         },
         "required" => ["task"],
