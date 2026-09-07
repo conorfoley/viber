@@ -58,7 +58,7 @@ defmodule Viber.Tools.Toolsets do
       description:
         "Browser accessibility tools for interacting with web pages via the Viber browser extension",
       tools:
-        ~w[browser_click browser_type browser_scroll browser_navigate browser_focus browser_get_accessibility_tree]
+        ~w[browser_click browser_type browser_scroll browser_navigate browser_focus browser_get_accessibility_tree browser_wait_for_load]
     }
   ]
 

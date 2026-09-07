@@ -56,7 +56,10 @@ defmodule Viber.Server.SSE do
             end
 
           {:error, reason} ->
-            Logger.warning("SSE: send error event=#{type} session=#{session_id} reason=#{inspect(reason)}")
+            Logger.warning(
+              "SSE: send error event=#{type} session=#{session_id} reason=#{inspect(reason)}"
+            )
+
             conn
         end
 

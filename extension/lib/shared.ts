@@ -47,6 +47,7 @@ export const TOOL_LABELS: Record<string, { label: string; icon: string }> = {
   browser_navigate: { label: "Navigate", icon: "🔗" },
   browser_focus: { label: "Focus", icon: "◎" },
   browser_get_accessibility_tree: { label: "Read page", icon: "📄" },
+  browser_wait_for_load: { label: "Wait for load", icon: "⏳" },
   bash: { label: "Run command", icon: "▶" },
   read_file: { label: "Read file", icon: "📖" },
   write_file: { label: "Write file", icon: "✏" },

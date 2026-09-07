@@ -24,6 +24,7 @@ defmodule Viber.Runtime.BrowserAction.Broker do
   alias Viber.Runtime.{BrowserAction, Event}
 
   @default_timeout 30_000
+  @default_tab_ready_timeout 5_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -113,6 +114,46 @@ defmodule Viber.Runtime.BrowserAction.Broker do
     GenServer.call(server, {:resolve, action_id, result, session_id})
   end
 
+  @doc """
+  Block the caller until the browser extension signals that the current tab's
+  content script is active (via `notify_tab_ready/2`) or the timeout elapses.
+
+  Returns `:ok` when the tab is ready, or `{:error, :timeout}`.
+  """
+  @spec wait_for_tab_ready(String.t() | nil, keyword()) :: :ok | {:error, :timeout}
+  def wait_for_tab_ready(session_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+
+    timeout =
+      Keyword.get(
+        opts,
+        :timeout,
+        Application.get_env(:viber, :browser_toolset, [])
+        |> Keyword.get(:tab_ready_timeout_ms, @default_tab_ready_timeout)
+      )
+
+    :ok = GenServer.call(server, {:register_tab_waiter, session_id, self()})
+
+    receive do
+      {:tab_ready, ^session_id} -> :ok
+    after
+      timeout ->
+        GenServer.cast(server, {:cancel_tab_waiter, session_id, self()})
+        {:error, :timeout}
+    end
+  end
+
+  @doc """
+  Signal that the tab for `session_id` is ready (content script active).
+
+  Unblocks all callers waiting via `wait_for_tab_ready/2`.
+  """
+  @spec notify_tab_ready(String.t() | nil, keyword()) :: :ok
+  def notify_tab_ready(session_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:tab_ready, session_id})
+  end
+
   @doc "List pending action ids (for diagnostics / tests)."
   @spec pending(keyword()) :: [String.t()]
   def pending(opts \\ []) do
@@ -122,7 +163,7 @@ defmodule Viber.Runtime.BrowserAction.Broker do
 
   @impl true
   def init(:ok) do
-    {:ok, %{pending: %{}, monitors: %{}}}
+    {:ok, %{pending: %{}, monitors: %{}, tab_waiters: %{}}}
   end
 
   @impl true
@@ -161,6 +202,30 @@ defmodule Viber.Runtime.BrowserAction.Broker do
     {:reply, Map.keys(state.pending), state}
   end
 
+  def handle_call({:register_tab_waiter, session_id, caller}, _from, state) do
+    ref = Process.monitor(caller)
+    waiters = Map.update(state.tab_waiters, session_id, [{caller, ref}], &[{caller, ref} | &1])
+    monitors = Map.put(state.monitors, ref, {:tab_waiter, session_id})
+    {:reply, :ok, %{state | tab_waiters: waiters, monitors: monitors}}
+  end
+
+  def handle_call({:tab_ready, session_id}, _from, state) do
+    {session_waiters, tab_waiters} = Map.pop(state.tab_waiters, session_id, [])
+
+    monitors =
+      Enum.reduce(session_waiters, state.monitors, fn {pid, ref}, acc ->
+        Process.demonitor(ref, [:flush])
+        send(pid, {:tab_ready, session_id})
+        Map.delete(acc, ref)
+      end)
+
+    Logger.info(
+      "BrowserAction.Broker: tab_ready session=#{inspect(session_id)} notified=#{length(session_waiters)}"
+    )
+
+    {:reply, :ok, %{state | tab_waiters: tab_waiters, monitors: monitors}}
+  end
+
   @impl true
   def handle_cast({:cancel, action_id}, state) do
     case Map.pop(state.pending, action_id) do
@@ -173,11 +238,58 @@ defmodule Viber.Runtime.BrowserAction.Broker do
     end
   end
 
+  def handle_cast({:cancel_tab_waiter, session_id, caller}, state) do
+    case Map.get(state.tab_waiters, session_id) do
+      nil ->
+        {:noreply, state}
+
+      waiters ->
+        {to_remove, to_keep} = Enum.split_with(waiters, fn {pid, _ref} -> pid == caller end)
+
+        monitors =
+          Enum.reduce(to_remove, state.monitors, fn {_pid, ref}, acc ->
+            Process.demonitor(ref, [:flush])
+            Map.delete(acc, ref)
+          end)
+
+        tab_waiters =
+          if to_keep == [] do
+            Map.delete(state.tab_waiters, session_id)
+          else
+            Map.put(state.tab_waiters, session_id, to_keep)
+          end
+
+        {:noreply, %{state | tab_waiters: tab_waiters, monitors: monitors}}
+    end
+  end
+
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Map.pop(state.monitors, ref) do
       {nil, _} ->
         {:noreply, state}
+
+      {{:tab_waiter, session_id}, monitors} ->
+        Logger.debug(
+          "BrowserAction.Broker: tab waiter for session #{inspect(session_id)} died (#{inspect(reason)}); cleaning up"
+        )
+
+        tab_waiters =
+          case Map.get(state.tab_waiters, session_id) do
+            nil ->
+              state.tab_waiters
+
+            waiters ->
+              filtered = Enum.reject(waiters, fn {_pid, r} -> r == ref end)
+
+              if filtered == [] do
+                Map.delete(state.tab_waiters, session_id)
+              else
+                Map.put(state.tab_waiters, session_id, filtered)
+              end
+          end
+
+        {:noreply, %{state | monitors: monitors, tab_waiters: tab_waiters}}
 
       {action_id, monitors} ->
         Logger.debug(

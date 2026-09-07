@@ -143,6 +143,18 @@ defmodule Viber.Server.Router do
     end
   end
 
+  post "/sessions/:id/browser_tab_ready" do
+    case SessionHandler.get_session(id) do
+      {:ok, _pid} ->
+        Logger.info("Router: browser_tab_ready session=#{id}")
+        Viber.Runtime.BrowserAction.Broker.notify_tab_ready(id)
+        send_json(conn, 200, %{ok: true})
+
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "Session not found"})
+    end
+  end
+
   post "/sessions/:id/browser_action_result" do
     action_id = conn.body_params["action_id"]
     result = conn.body_params["result"]
@@ -157,7 +169,10 @@ defmodule Viber.Server.Router do
       true ->
         is_error = Map.get(result, "is_error", false)
         output_bytes = byte_size(Map.get(result, "output", ""))
-        Logger.info("Router: browser_action_result id=#{action_id} session=#{id} is_error=#{is_error} output_bytes=#{output_bytes}")
+
+        Logger.info(
+          "Router: browser_action_result id=#{action_id} session=#{id} is_error=#{is_error} output_bytes=#{output_bytes}"
+        )
 
         case SessionHandler.get_session(id) do
           {:ok, _pid} ->

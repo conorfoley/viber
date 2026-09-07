@@ -912,6 +912,21 @@ defmodule Viber.Tools.Registry do
       permission: :allow,
       concurrent: false,
       handler: nil
+    },
+    "browser_wait_for_load" => %Spec{
+      name: "browser_wait_for_load",
+      toolset: :browser,
+      description:
+        "Wait for the current browser tab to finish loading after a navigation. " <>
+          "Call this after browser_navigate to ensure the new page's content script is active before interacting with the page.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{},
+        "additionalProperties" => false
+      },
+      permission: :allow,
+      concurrent: false,
+      handler: nil
     }
   }
 

@@ -117,6 +117,80 @@ async function captureContext(tabId: number): Promise<Record<string, unknown>> {
   }
 }
 
+function waitForTabLoad(tabId: number, timeoutMs = 15000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      browser.tabs.onUpdated.removeListener(listener);
+      reject(new Error("Tab load timed out"));
+    }, timeoutMs);
+
+    function listener(
+      updatedTabId: number,
+      changeInfo: browser.Tabs.OnUpdatedChangeInfoType
+    ) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timer);
+        browser.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    browser.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function notifyTabReady(sessionId: string): Promise<void> {
+  try {
+    await fetch(`${VIBER_URL}/sessions/${sessionId}/browser_tab_ready`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch {
+  }
+}
+
+async function handleNavigateInBackground(
+  tabId: number,
+  sessionId: string,
+  input: Record<string, unknown>
+): Promise<{ output: string; is_error: boolean }> {
+  const url = input.url as string;
+  const scheme = url.split(":")[0].toLowerCase();
+  if (scheme !== "http" && scheme !== "https") {
+    return { output: `Blocked navigation to unsafe URL scheme: ${scheme}`, is_error: true };
+  }
+
+  try {
+    await browser.tabs.update(tabId, { url });
+    await waitForTabLoad(tabId);
+    await notifyTabReady(sessionId);
+    const tab = await browser.tabs.get(tabId);
+    return { output: `Navigated to ${tab.url ?? url}`, is_error: false };
+  } catch (e) {
+    return { output: `Navigation failed: ${String(e)}`, is_error: true };
+  }
+}
+
+async function handleWaitForLoadInBackground(
+  tabId: number,
+  sessionId: string
+): Promise<{ output: string; is_error: boolean }> {
+  try {
+    const tab = await browser.tabs.get(tabId);
+    if (tab.status === "complete") {
+      await notifyTabReady(sessionId);
+      return { output: `Tab already loaded: ${tab.url ?? "unknown"}`, is_error: false };
+    }
+    await waitForTabLoad(tabId);
+    await notifyTabReady(sessionId);
+    const updated = await browser.tabs.get(tabId);
+    return { output: `Tab loaded: ${updated.url ?? "unknown"}`, is_error: false };
+  } catch (e) {
+    return { output: `Wait for load failed: ${String(e)}`, is_error: true };
+  }
+}
+
 async function executeActionInTab(
   tabId: number,
   toolName: string,
@@ -347,10 +421,14 @@ async function handleSseEvent(
       broadcastOrBuffer({ type: "BROWSER_ACTION_START", toolName: tool_name, input });
 
       let result: { output: string; is_error: boolean };
-      if (tabId !== null) {
-        result = await executeActionInTab(tabId, tool_name, input);
-      } else {
+      if (tabId === null) {
         result = { output: "No active tab to execute action on", is_error: true };
+      } else if (tool_name === "browser_navigate") {
+        result = await handleNavigateInBackground(tabId, sessionId, input);
+      } else if (tool_name === "browser_wait_for_load") {
+        result = await handleWaitForLoadInBackground(tabId, sessionId);
+      } else {
+        result = await executeActionInTab(tabId, tool_name, input);
       }
 
       await postActionResult(sessionId, action_id, result);

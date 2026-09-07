@@ -229,16 +229,6 @@ async function executeAction(
         return { output: `Scrolled ${direction} by ${amount}px`, is_error: false };
       }
 
-      case "browser_navigate": {
-        const url = input.url as string;
-        const scheme = url.split(":")[0].toLowerCase();
-        if (scheme !== "http" && scheme !== "https") {
-          return { output: `Blocked navigation to unsafe URL scheme: ${scheme}`, is_error: true };
-        }
-        window.location.href = url;
-        return { output: `Navigating to ${url}`, is_error: false };
-      }
-
       case "browser_focus": {
         const el = resolveRef(input.ref as number) as HTMLElement | null;
         if (!el) return { output: `Element [${input.ref}] not found`, is_error: true };

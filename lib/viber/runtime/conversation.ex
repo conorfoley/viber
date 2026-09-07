@@ -33,6 +33,7 @@ defmodule Viber.Runtime.Conversation do
     browser_navigate
     browser_focus
     browser_get_accessibility_tree
+    browser_wait_for_load
   ]
 
   @spec run(Request.t() | keyword() | map()) :: {:ok, term()} | {:error, term()}
@@ -314,7 +315,11 @@ defmodule Viber.Runtime.Conversation do
 
     case BrowserAction.Broker.request(session_id, name, input, event_handler) do
       {:ok, %{"output" => output, "is_error" => true}} ->
-        Logger.info("Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}")
+        output = normalize_browser_error(output)
+
+        Logger.info(
+          "Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+        )
 
         event_handler.(
           Event.new(:tool_result, %{name: name, id: id, output: output, is_error: true})
@@ -323,7 +328,21 @@ defmodule Viber.Runtime.Conversation do
         {id, name, output, true}
 
       {:ok, %{"output" => output}} ->
-        Logger.info("Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}")
+        Logger.info(
+          "Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+        )
+
+        if name == "browser_navigate" do
+          case BrowserAction.Broker.wait_for_tab_ready(session_id) do
+            :ok ->
+              Logger.info("Conversation: tab ready after navigate id=#{id}")
+
+            {:error, :timeout} ->
+              Logger.warning(
+                "Conversation: tab_ready timeout after navigate id=#{id}, proceeding anyway"
+              )
+          end
+        end
 
         event_handler.(
           Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
@@ -630,6 +649,25 @@ defmodule Viber.Runtime.Conversation do
       end
     else
       toolsets
+    end
+  end
+
+  defp normalize_browser_error(output) when is_binary(output) do
+    cond do
+      String.contains?(output, "Missing host permission for the tab") ->
+        "Browser tab connection lost after navigation. The content script is no longer active in the current tab. " <>
+          "Try using browser_navigate to reload the page, or use browser_wait_for_load to wait for the tab to become ready."
+
+      String.contains?(output, "Could not establish connection") ->
+        "Browser extension connection lost. The extension may have been reloaded or the tab was closed. " <>
+          "Try navigating to the page again with browser_navigate."
+
+      String.contains?(output, "Extension context invalidated") ->
+        "Browser extension context was invalidated. The extension was likely updated or reloaded. " <>
+          "Reconnect by navigating to the target page with browser_navigate."
+
+      true ->
+        output
     end
   end
 
