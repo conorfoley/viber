@@ -25,6 +25,7 @@ defmodule Viber.Runtime.Config do
           permission_mode: atom() | nil,
           max_iterations: pos_integer() | nil,
           effort: String.t() | nil,
+          thinking: String.t() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
           custom_instructions: String.t() | nil,
@@ -38,6 +39,7 @@ defmodule Viber.Runtime.Config do
             permission_mode: nil,
             max_iterations: nil,
             effort: nil,
+            thinking: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
             custom_instructions: nil,
@@ -73,6 +75,7 @@ defmodule Viber.Runtime.Config do
       permission_mode: override.permission_mode || base.permission_mode,
       max_iterations: override.max_iterations || base.max_iterations,
       effort: override.effort || base.effort,
+      thinking: override.thinking || base.thinking,
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
       hooks: %{
         pre_tool_use: base.hooks.pre_tool_use ++ override.hooks.pre_tool_use,
@@ -120,6 +123,7 @@ defmodule Viber.Runtime.Config do
       ["customInstructions"] -> config.custom_instructions
       ["maxIterations"] -> config.max_iterations
       ["effort"] -> config.effort
+      ["thinking"] -> config.thinking
       ["mcpServers"] -> config.mcp_servers
       ["mcpServers", name] -> Map.get(config.mcp_servers, name)
       ["hooks"] -> config.hooks
@@ -160,6 +164,7 @@ defmodule Viber.Runtime.Config do
       permission_mode: parse_permission_mode(data["permissions"]),
       max_iterations: parse_max_iterations(data["maxIterations"]),
       effort: parse_effort(data["effort"]),
+      thinking: parse_thinking(data["thinking"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),
       custom_instructions: data["customInstructions"],
@@ -218,4 +223,9 @@ defmodule Viber.Runtime.Config do
 
   defp parse_effort(val) when val in @effort_levels, do: val
   defp parse_effort(_), do: nil
+
+  @thinking_modes ~w[adaptive off]
+
+  defp parse_thinking(val) when val in @thinking_modes, do: val
+  defp parse_thinking(_), do: nil
 end

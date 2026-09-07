@@ -10,9 +10,10 @@ defmodule Viber.Commands.Handler do
   Each handler module that `use`s this behaviour gets a default `run/3`
   that delegates to its existing `execute/2` and translates legacy return
   shapes (`{:ok, text}`, `{:error, reason}`, `{:retry, input}`,
-  `{:resume, pid}`, `{:update_toolsets, list}`) into the canonical
-  `Result` struct. Handlers may override `run/3` to take full control
-  (emit events, customise state patches).
+  `{:resume, pid}`, `{:update_toolsets, list}`,
+  `{:update_config, patch, text}`) into the canonical `Result` struct.
+  Handlers may override `run/3` to take full control (emit events,
+  customise state patches).
   """
 
   alias Viber.Commands.Result
@@ -40,12 +41,26 @@ defmodule Viber.Commands.Handler do
     context = Map.put(opts, :session, session)
 
     case handler.execute(args, context) do
-      {:ok, text} -> {:ok, %Result{text: text}}
-      {:error, reason} -> {:error, reason}
-      {:retry, input} -> {:ok, %Result{state_patch: %{retry_input: input}}}
-      {:resume, pid} when is_pid(pid) -> {:ok, %Result{state_patch: %{session: pid}}}
-      {:update_toolsets, list} -> {:ok, %Result{state_patch: %{enabled_toolsets: list}}}
-      other -> {:error, {:unexpected_handler_return, other}}
+      {:ok, text} ->
+        {:ok, %Result{text: text}}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:retry, input} ->
+        {:ok, %Result{state_patch: %{retry_input: input}}}
+
+      {:resume, pid} when is_pid(pid) ->
+        {:ok, %Result{state_patch: %{session: pid}}}
+
+      {:update_toolsets, list} ->
+        {:ok, %Result{state_patch: %{enabled_toolsets: list}}}
+
+      {:update_config, patch, text} ->
+        {:ok, %Result{text: text, state_patch: %{config_patch: patch}}}
+
+      other ->
+        {:error, {:unexpected_handler_return, other}}
     end
   end
 end

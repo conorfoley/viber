@@ -112,6 +112,7 @@ defmodule Viber.Runtime.Conversation do
     api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
 
     resolved_model = Client.resolve_model_alias(ctx.model)
+    effort = effective_effort(ctx)
 
     request = %MessageRequest{
       model: resolved_model,
@@ -119,8 +120,8 @@ defmodule Viber.Runtime.Conversation do
       messages: api_messages,
       system: system_prompt,
       tools: tool_defs,
-      thinking: Client.thinking_config(resolved_model),
-      output_config: Client.output_config(resolved_model, effective_effort(ctx)),
+      thinking: Client.thinking_config(resolved_model, thinking_mode(ctx), effort),
+      output_config: Client.output_config(resolved_model, effort),
       stream: true
     }
 
@@ -729,6 +730,12 @@ defmodule Viber.Runtime.Conversation do
        do: effort
 
   defp effective_effort(_), do: nil
+
+  defp thinking_mode(%Context{config: %Viber.Runtime.Config{thinking: mode}})
+       when is_binary(mode),
+       do: mode
+
+  defp thinking_mode(_), do: "adaptive"
 
   @auto_compact_threshold 80_000
 

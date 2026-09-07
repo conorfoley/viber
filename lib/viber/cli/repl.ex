@@ -126,6 +126,7 @@ defmodule Viber.CLI.Repl do
     |> maybe_put(:session, patch[:session])
     |> maybe_put(:model, patch[:model])
     |> maybe_put(:api_key, patch[:api_key])
+    |> maybe_put(:config_patch, patch[:config_patch])
   end
 
   defp maybe_put(state, _key, nil), do: state
@@ -135,6 +136,11 @@ defmodule Viber.CLI.Repl do
   defp maybe_put(state, :api_key, key) when is_binary(key) do
     config = state.config || %Viber.Runtime.Config{}
     %{state | config: %{config | api_key: key}}
+  end
+
+  defp maybe_put(state, :config_patch, patch) when is_map(patch) do
+    config = state.config || %Viber.Runtime.Config{}
+    %{state | config: struct(config, patch)}
   end
 
   defp maybe_put(state, _, _), do: state

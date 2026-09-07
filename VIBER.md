@@ -41,14 +41,14 @@ Tools declare a static `permission` level. Tools may also provide a `permission_
 
 ## LLM Features
 - **Models**: aliases `fable` → `claude-fable-5`, `opus` → `claude-opus-5`, `sonnet` → `claude-sonnet-5`, `haiku` → `claude-haiku-4-5` (see `Viber.API.Client`). OpenAI-compatible and Ollama models are also supported.
-- **Adaptive thinking**: `thinking: {type: "adaptive"}` is sent automatically on models that support it (Fable 5, Opus 5/4.8/4.7/4.6, Sonnet 5/4.6), with `display: "summarized"` where thinking is omitted by default. Thinking blocks (and signatures) are accumulated from the stream, persisted, and replayed on subsequent turns.
-- **Effort**: `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`) set via the `effort` config key or per-sub-agent; `xhigh` is clamped to `high` on the 4.6 family.
+- **Adaptive thinking**: `thinking: {type: "adaptive"}` is sent automatically on models that support it (Fable 5, Opus 5/4.8/4.7/4.6, Sonnet 5/4.6), with `display: "summarized"` where thinking is omitted by default. Thinking blocks (and signatures) are accumulated from the stream, persisted, and replayed on subsequent turns. The `thinking` config key (`"adaptive"` default, `"off"`) can disable it where the API allows (`{type: "disabled"}` on Opus 5/Sonnet 5, omitted on the 4.x family; Fable 5 cannot disable thinking, and Opus 5 keeps adaptive at `xhigh`/`max` effort). Note: the `display` setting is visibility-only — thinking is billed identically whether shown or hidden, so prefer lowering `effort` over turning thinking off.
+- **Effort**: `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`) set via the `effort` config key, the `/effort` command at runtime, or per-sub-agent; `xhigh` is clamped to `high` on the 4.6 family. Thinking mode is likewise switchable at runtime via `/thinking adaptive|off`. Runtime changes flow through the command `state_patch` mechanism (`:config_patch`) and apply from the next turn.
 - **Prompt caching**: the Anthropic provider automatically attaches `cache_control` breakpoints to the system prompt and the last message block. The system prompt is kept byte-stable across turns (day-granularity date) so the cache actually hits.
 - **Sub-agents**: `spawn_agent` runs isolated child agents in parallel. `role: "worker"` (default) delegates tasks; `role: "reviewer"` performs an Oligarchy-style independent post-run review — it gathers its own evidence and ends with `VERDICT: passed|failed`, which may contradict the worker. Use `effort: "low"` for cheap scouting.
 - **Skills**: instruction packages in `.viber/skills/<name>/SKILL.md` (optional `---` frontmatter with `name:`/`description:`). Only name + description are placed in the system prompt; the `skill` tool loads full instructions on demand.
 
 ## Slash Commands
-`/help`, `/model`, `/compact`, `/config`, `/clear`, `/status`, `/attach`, `/bug`, `/connect`, `/databases`, `/init`, `/reload`, `/resume`
+`/help`, `/model`, `/effort`, `/thinking`, `/compact`, `/config`, `/clear`, `/status`, `/attach`, `/bug`, `/connect`, `/databases`, `/init`, `/reload`, `/resume`
 
 ## Conventions
 - Always run `mix format` after changes.

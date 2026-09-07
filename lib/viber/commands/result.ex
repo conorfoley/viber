@@ -16,6 +16,8 @@ defmodule Viber.Commands.Result do
     * `:session` — replace the active session pid (e.g. after `/resume`).
     * `:model` — switch the active model (e.g. after `/model <name>`).
     * `:enabled_toolsets` — replace the active toolset list (`/toolset ...`).
+    * `:config_patch` — merge these keys into the active runtime config
+      (e.g. `/effort low` patches `%{effort: "low"}`).
     * `:retry_input` — re-send this user input as the next message
       (`/retry`).
     * `:cleared` — session history was cleared.

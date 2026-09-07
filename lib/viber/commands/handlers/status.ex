@@ -18,6 +18,8 @@ defmodule Viber.Commands.Handlers.Status do
 
     lines = [
       "Model: #{model}",
+      "Effort: #{config_value(context[:config], :effort) || "default (high)"}",
+      "Thinking: #{config_value(context[:config], :thinking) || "adaptive"}",
       "Permission mode: #{Permissions.mode_to_string(permission_mode)}",
       "Messages: #{length(messages)}",
       "Usage: #{Usage.format(usage)}"
@@ -35,4 +37,7 @@ defmodule Viber.Commands.Handlers.Status do
 
     {:ok, Enum.join(lines, "\n")}
   end
+
+  defp config_value(%Viber.Runtime.Config{} = config, key), do: Map.get(config, key)
+  defp config_value(_, _), do: nil
 end

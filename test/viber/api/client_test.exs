@@ -115,6 +115,28 @@ defmodule Viber.API.ClientTest do
       assert Client.thinking_config("gpt-4o") == nil
       assert Client.thinking_config("ollama:llama3") == nil
     end
+
+    test "mode off sends disabled on Opus 5 / Sonnet 5" do
+      assert Client.thinking_config("claude-opus-5", "off") == %{type: "disabled"}
+      assert Client.thinking_config("sonnet", "off") == %{type: "disabled"}
+    end
+
+    test "mode off omits the parameter on the 4.x family and Fable 5" do
+      assert Client.thinking_config("claude-opus-4-8", "off") == nil
+      assert Client.thinking_config("claude-opus-4-6", "off") == nil
+      assert Client.thinking_config("claude-sonnet-4-6", "off") == nil
+      assert Client.thinking_config("fable", "off") == nil
+    end
+
+    test "mode off keeps adaptive on Opus 5 at xhigh/max effort" do
+      assert Client.thinking_config("claude-opus-5", "off", "xhigh") ==
+               %{type: "adaptive", display: "summarized"}
+
+      assert Client.thinking_config("claude-opus-5", "off", "max") ==
+               %{type: "adaptive", display: "summarized"}
+
+      assert Client.thinking_config("claude-opus-5", "off", "high") == %{type: "disabled"}
+    end
   end
 
   describe "output_config/2" do
