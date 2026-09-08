@@ -6,7 +6,8 @@ defmodule Viber.Runtime.Conversation.StreamAccumulator do
   @type block_state ::
           %{type: :text, text: String.t()}
           | %{type: :tool_use, id: String.t(), name: String.t(), input: String.t()}
-          | %{type: :thinking, text: String.t()}
+          | %{type: :thinking, text: String.t(), signature: String.t()}
+          | %{type: :redacted_thinking, data: String.t()}
           | %{type: :unknown}
 
   @type t :: %__MODULE__{

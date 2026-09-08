@@ -33,17 +33,18 @@ defmodule Viber.Commands.Handlers.Databases do
           _ -> nil
         end
 
-      lines =
-        Enum.map(conns, fn conn ->
-          status = if conn[:connected], do: "connected", else: "disconnected"
-          ro = if conn.read_only, do: " [read-only]", else: ""
-          active = if conn.name == active_name, do: " ← active", else: ""
-
-          "  #{conn.name} | #{conn.type}://#{conn.hostname}:#{conn.port}/#{conn.database} | #{status}#{ro}#{active}"
-        end)
+      lines = Enum.map(conns, &format_connection_line(&1, active_name))
 
       header = "Database connections:"
       {:ok, Enum.join([header | lines], "\n")}
     end
+  end
+
+  defp format_connection_line(conn, active_name) do
+    status = if conn[:connected], do: "connected", else: "disconnected"
+    ro = if conn.read_only, do: " [read-only]", else: ""
+    active = if conn.name == active_name, do: " ← active", else: ""
+
+    "  #{conn.name} | #{conn.type}://#{conn.hostname}:#{conn.port}/#{conn.database} | #{status}#{ro}#{active}"
   end
 end

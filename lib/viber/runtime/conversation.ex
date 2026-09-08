@@ -6,7 +6,18 @@ defmodule Viber.Runtime.Conversation do
   require Logger
 
   alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Compact, Event, Permissions, Prompt, Session, SubAgent, Usage}
+
+  alias Viber.Runtime.{
+    BrowserAction,
+    Compact,
+    Event,
+    Permissions,
+    Prompt,
+    Session,
+    SubAgent,
+    Usage
+  }
+
   alias Viber.Runtime.Permissions.Broker
   alias Viber.Runtime.Conversation.{Context, Request, StreamAccumulator}
   alias Viber.Tools.{Executor, Registry, Spec}
@@ -14,6 +25,16 @@ defmodule Viber.Runtime.Conversation do
   @type event :: Event.t()
 
   @default_max_iterations 25
+
+  @browser_tool_names ~w[
+    browser_click
+    browser_type
+    browser_scroll
+    browser_navigate
+    browser_focus
+    browser_get_accessibility_tree
+    browser_wait_for_load
+  ]
 
   @spec run(Request.t() | keyword() | map()) :: {:ok, term()} | {:error, term()}
   def run(%Request{} = req) do
@@ -33,6 +54,7 @@ defmodule Viber.Runtime.Conversation do
       browser_context: req.browser_context,
       interrupt: req.interrupt,
       enabled_toolsets: req.enabled_toolsets,
+      effort: req.effort,
       max_iterations: max_iter
     }
 
@@ -84,17 +106,22 @@ defmodule Viber.Runtime.Conversation do
 
     tool_defs =
       Registry.builtin_specs()
-      |> filter_by_toolsets(ctx.enabled_toolsets)
+      |> filter_by_toolsets(effective_toolsets(ctx))
       |> Enum.map(&Spec.to_tool_definition/1)
 
-    api_messages = Enum.map(messages, &to_api_message/1)
+    api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
+
+    resolved_model = Client.resolve_model_alias(ctx.model)
+    effort = effective_effort(ctx)
 
     request = %MessageRequest{
-      model: Client.resolve_model_alias(ctx.model),
+      model: resolved_model,
       max_tokens: Client.max_tokens_for_model(ctx.model),
       messages: api_messages,
       system: system_prompt,
       tools: tool_defs,
+      thinking: Client.thinking_config(resolved_model, thinking_mode(ctx), effort),
+      output_config: Client.output_config(resolved_model, effort),
       stream: true
     }
 
@@ -141,9 +168,17 @@ defmodule Viber.Runtime.Conversation do
       end
 
     assistant_blocks =
-      Enum.flat_map(acc.blocks, fn
+      acc.blocks
+      |> Enum.sort_by(fn {idx, _} -> idx end)
+      |> Enum.flat_map(fn
         {_idx, %{type: :text, text: text}} ->
           [{:text, text}]
+
+        {_idx, %{type: :thinking, text: text, signature: signature}} when signature != "" ->
+          [{:thinking, text, signature}]
+
+        {_idx, %{type: :redacted_thinking, data: data}} when data != "" ->
+          [{:redacted_thinking, data}]
 
         {_idx, %{type: :tool_use, id: id, name: name, input: input}} ->
           parsed = parse_tool_input(input)
@@ -184,7 +219,7 @@ defmodule Viber.Runtime.Conversation do
     event_handler = ctx.event_handler
     session_id = safe_session_id(ctx.session)
 
-    active_specs = Registry.builtin_specs() |> filter_by_toolsets(ctx.enabled_toolsets)
+    active_specs = Registry.builtin_specs() |> filter_by_toolsets(effective_toolsets(ctx))
 
     specs_by_name =
       active_specs
@@ -197,93 +232,195 @@ defmodule Viber.Runtime.Conversation do
 
     {decisions, newly_allowed} =
       Enum.reduce(tool_uses, {[], MapSet.new()}, fn {id, name, input_map}, {acc, allowed_set} ->
-        input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
-        input = ensure_parsed_input(input_map)
-
-        policy =
-          case Map.get(specs_by_name, name) do
-            %Spec{permission_fn: fun} = spec when fun != nil ->
-              effective = Spec.effective_permission(spec, input)
-              Permissions.register_tool(base_policy, name, effective)
-
-            _ ->
-              base_policy
-          end
-
-        already_allowed =
-          MapSet.member?(ctx.allowed_tools, name) or MapSet.member?(allowed_set, name)
-
-        case Permissions.check(policy, name, input_str) do
-          permission when permission in [:allow, :prompt] ->
-            if permission == :allow or already_allowed do
-              {[{:run, id, name, input} | acc], allowed_set}
-            else
-              broker_result =
-                try do
-                  Broker.request(session_id, name, input_str, event_handler)
-                catch
-                  :exit, _ -> :deny
-                end
-
-              case broker_result do
-                :allow ->
-                  {[{:run, id, name, input} | acc], allowed_set}
-
-                :always_allow ->
-                  {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
-
-                :deny ->
-                  reason = "tool '#{name}' denied by user"
-                  {[{:denied, id, name, reason} | acc], allowed_set}
-              end
-            end
-
-          {:deny, reason} ->
-            {[{:denied, id, name, reason} | acc], allowed_set}
-        end
+        decide_tool_use(
+          {id, name, input_map},
+          {acc, allowed_set},
+          ctx,
+          specs_by_name,
+          base_policy,
+          session_id,
+          event_handler
+        )
       end)
 
     decisions = Enum.reverse(decisions)
     ctx = %{ctx | allowed_tools: MapSet.union(ctx.allowed_tools, newly_allowed)}
 
-    run_sequential? =
-      Enum.any?(decisions, fn
-        {:run, _id, name, _input} ->
-          case Map.get(specs_by_name, name) do
-            %Spec{concurrent: false} -> true
-            _ -> false
-          end
-
-        _ ->
-          false
-      end)
-
     results =
-      if run_sequential? do
+      if sequential_execution?(decisions, specs_by_name) do
         Enum.map(decisions, &run_decision(&1, ctx, event_handler))
       else
-        ctx.task_supervisor
-        |> Task.Supervisor.async_stream_nolink(
-          decisions,
-          &run_decision(&1, ctx, event_handler),
-          ordered: true,
-          timeout: 300_000,
-          on_timeout: :kill_task
-        )
-        |> Enum.zip(decisions)
-        |> Enum.map(fn
-          {{:ok, result}, _} ->
-            result
-
-          {{:exit, reason}, {:run, id, name, _}} ->
-            {id, name, "Tool execution failed: #{inspect(reason)}", true}
-
-          {{:exit, reason}, {:denied, id, name, _}} ->
-            {id, name, "Tool execution failed: #{inspect(reason)}", true}
-        end)
+        run_decisions_concurrently(decisions, ctx, event_handler)
       end
 
     {results, ctx}
+  end
+
+  defp decide_tool_use(
+         {id, name, input_map},
+         {acc, allowed_set},
+         ctx,
+         specs_by_name,
+         base_policy,
+         session_id,
+         event_handler
+       ) do
+    input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
+    input = ensure_parsed_input(input_map)
+    policy = resolve_tool_policy(specs_by_name, base_policy, name, input)
+
+    already_allowed =
+      MapSet.member?(ctx.allowed_tools, name) or MapSet.member?(allowed_set, name)
+
+    tool_ctx = %{
+      id: id,
+      name: name,
+      input: input,
+      input_str: input_str,
+      already_allowed: already_allowed,
+      session_id: session_id,
+      event_handler: event_handler
+    }
+
+    handle_permission_check(
+      Permissions.check(policy, name, input_str),
+      tool_ctx,
+      {acc, allowed_set}
+    )
+  end
+
+  defp resolve_tool_policy(specs_by_name, base_policy, name, input) do
+    case Map.get(specs_by_name, name) do
+      %Spec{permission_fn: fun} = spec when fun != nil ->
+        effective = Spec.effective_permission(spec, input)
+        Permissions.register_tool(base_policy, name, effective)
+
+      _ ->
+        base_policy
+    end
+  end
+
+  defp handle_permission_check({:deny, reason}, %{id: id, name: name}, {acc, allowed_set}) do
+    {[{:denied, id, name, reason} | acc], allowed_set}
+  end
+
+  defp handle_permission_check(permission, tool_ctx, {acc, allowed_set})
+       when permission in [:allow, :prompt] do
+    if permission == :allow or tool_ctx.already_allowed do
+      {[{:run, tool_ctx.id, tool_ctx.name, tool_ctx.input} | acc], allowed_set}
+    else
+      resolve_via_broker(tool_ctx, {acc, allowed_set})
+    end
+  end
+
+  defp resolve_via_broker(tool_ctx, {acc, allowed_set}) do
+    %{
+      id: id,
+      name: name,
+      input: input,
+      input_str: input_str,
+      session_id: session_id,
+      event_handler: event_handler
+    } = tool_ctx
+
+    broker_result =
+      try do
+        Broker.request(session_id, name, input_str, event_handler)
+      catch
+        :exit, _ -> :deny
+      end
+
+    case broker_result do
+      :allow ->
+        {[{:run, id, name, input} | acc], allowed_set}
+
+      :always_allow ->
+        {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
+
+      :deny ->
+        reason = "tool '#{name}' denied by user"
+        {[{:denied, id, name, reason} | acc], allowed_set}
+    end
+  end
+
+  defp sequential_execution?(decisions, specs_by_name) do
+    Enum.any?(decisions, fn
+      {:run, _id, name, _input} ->
+        case Map.get(specs_by_name, name) do
+          %Spec{concurrent: false} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  defp run_decisions_concurrently(decisions, ctx, event_handler) do
+    ctx.task_supervisor
+    |> Task.Supervisor.async_stream_nolink(
+      decisions,
+      &run_decision(&1, ctx, event_handler),
+      ordered: true,
+      timeout: 300_000,
+      on_timeout: :kill_task
+    )
+    |> Enum.zip(decisions)
+    |> Enum.map(fn
+      {{:ok, result}, _} ->
+        result
+
+      {{:exit, reason}, {:run, id, name, _}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+
+      {{:exit, reason}, {:denied, id, name, _}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+    end)
+  end
+
+  defp run_decision({:run, id, name, input}, ctx, event_handler)
+       when name in @browser_tool_names do
+    session_id = safe_session_id(ctx.session)
+    Logger.info("Conversation: browser tool start name=#{name} id=#{id}")
+    event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
+
+    case BrowserAction.Broker.request(session_id, name, input, event_handler) do
+      {:ok, %{"output" => output, "is_error" => true}} ->
+        output = normalize_browser_error(output)
+
+        Logger.info(
+          "Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+        )
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: true})
+        )
+
+        {id, name, output, true}
+
+      {:ok, %{"output" => output}} ->
+        Logger.info(
+          "Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+        )
+
+        maybe_wait_for_tab_ready(name, session_id, id)
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
+        )
+
+        {id, name, output, false}
+
+      {:error, :timeout} ->
+        msg = "Browser action '#{name}' timed out — is the extension connected?"
+        Logger.warning("Conversation: browser tool timeout name=#{name} id=#{id}")
+
+        event_handler.(
+          Event.new(:tool_result, %{name: name, id: id, output: msg, is_error: true})
+        )
+
+        {id, name, msg, true}
+    end
   end
 
   defp run_decision({:run, id, "spawn_agent", input}, ctx, event_handler) do
@@ -345,6 +482,20 @@ defmodule Viber.Runtime.Conversation do
     {id, name, reason, true}
   end
 
+  defp maybe_wait_for_tab_ready("browser_navigate", session_id, id) do
+    case BrowserAction.Broker.wait_for_tab_ready(session_id) do
+      :ok ->
+        Logger.info("Conversation: tab ready after navigate id=#{id}")
+
+      {:error, :timeout} ->
+        Logger.warning(
+          "Conversation: tab_ready timeout after navigate id=#{id}, proceeding anyway"
+        )
+    end
+  end
+
+  defp maybe_wait_for_tab_ready(_name, _session_id, _id), do: :ok
+
   defp parse_tool_input(input) when is_binary(input) do
     case Jason.decode(input) do
       {:ok, map} when is_map(map) -> map
@@ -356,6 +507,61 @@ defmodule Viber.Runtime.Conversation do
 
   defp ensure_parsed_input(input) when is_map(input), do: input
   defp ensure_parsed_input(input) when is_binary(input), do: parse_tool_input(input)
+
+  defp sanitize_messages(messages) do
+    messages
+    |> Enum.with_index()
+    |> Enum.map(fn {msg, idx} ->
+      next = Enum.at(messages, idx + 1)
+      sanitize_message(msg, next)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp sanitize_message(%{role: :assistant, blocks: blocks} = msg, next_msg) do
+    tool_use_ids = extract_tool_use_ids(blocks)
+
+    if tool_use_ids == [] do
+      msg
+    else
+      missing = tool_use_ids -- result_ids_for(next_msg)
+      drop_missing_tool_uses(msg, blocks, missing)
+    end
+  end
+
+  defp sanitize_message(msg, _next), do: msg
+
+  defp extract_tool_use_ids(blocks) do
+    Enum.flat_map(blocks, fn
+      {:tool_use, id, _name, _input} -> [id]
+      _ -> []
+    end)
+  end
+
+  defp result_ids_for(nil), do: []
+
+  defp result_ids_for(%{blocks: next_blocks}) do
+    Enum.flat_map(next_blocks, fn
+      {:tool_result, id, _name, _output, _err} -> [id]
+      _ -> []
+    end)
+  end
+
+  defp drop_missing_tool_uses(msg, _blocks, []), do: msg
+
+  defp drop_missing_tool_uses(msg, blocks, missing) do
+    clean_blocks =
+      Enum.reject(blocks, fn
+        {:tool_use, id, _name, _input} -> id in missing
+        _ -> false
+      end)
+
+    if clean_blocks == [] do
+      %{msg | blocks: [{:text, "[tool call interrupted - no results available]"}]}
+    else
+      %{msg | blocks: clean_blocks}
+    end
+  end
 
   defp to_api_message(%{role: role, blocks: blocks}) do
     api_role =
@@ -371,6 +577,14 @@ defmodule Viber.Runtime.Conversation do
   end
 
   defp block_to_api_content({:text, text}), do: %{type: "text", text: text}
+
+  defp block_to_api_content({:thinking, text, signature}) do
+    %{type: "thinking", thinking: text, signature: signature}
+  end
+
+  defp block_to_api_content({:redacted_thinking, data}) do
+    %{type: "redacted_thinking", data: data}
+  end
 
   defp block_to_api_content({:tool_use, id, name, input}) do
     %{type: "tool_use", id: id, name: name, input: input}
@@ -411,7 +625,10 @@ defmodule Viber.Runtime.Conversation do
           %{type: :tool_use, id: id, name: name, input: ""}
 
         %{type: "thinking"} ->
-          %{type: :thinking, text: ""}
+          %{type: :thinking, text: "", signature: ""}
+
+        %{type: "redacted_thinking"} = b ->
+          %{type: :redacted_thinking, data: Map.get(b, :data) || ""}
 
         _ ->
           %{type: :unknown}
@@ -432,6 +649,12 @@ defmodule Viber.Runtime.Conversation do
       {%{type: :thinking} = block, %{type: "thinking_delta", thinking: text}} ->
         handler.(Event.new(:thinking_delta, %{text: text}))
         %{acc | blocks: Map.put(acc.blocks, idx, %{block | text: block.text <> text})}
+
+      {%{type: :thinking} = block, %{type: "signature_delta", signature: signature}} ->
+        %{
+          acc
+          | blocks: Map.put(acc.blocks, idx, %{block | signature: block.signature <> signature})
+        }
 
       _ ->
         acc
@@ -506,6 +729,41 @@ defmodule Viber.Runtime.Conversation do
     Enum.filter(specs, fn spec -> MapSet.member?(toolset_set, spec.toolset) end)
   end
 
+  defp effective_toolsets(%Context{enabled_toolsets: toolsets, browser_context: browser_ctx}) do
+    auto_activate? =
+      Application.get_env(:viber, :browser_toolset, [])
+      |> Keyword.get(:auto_activate, true)
+
+    if auto_activate? and not is_nil(browser_ctx) do
+      case toolsets do
+        nil -> nil
+        [] -> []
+        list -> Enum.uniq([:browser | list])
+      end
+    else
+      toolsets
+    end
+  end
+
+  defp normalize_browser_error(output) when is_binary(output) do
+    cond do
+      String.contains?(output, "Missing host permission for the tab") ->
+        "Browser tab connection lost after navigation. The content script is no longer active in the current tab. " <>
+          "Try using browser_navigate to reload the page, or use browser_wait_for_load to wait for the tab to become ready."
+
+      String.contains?(output, "Could not establish connection") ->
+        "Browser extension connection lost. The extension may have been reloaded or the tab was closed. " <>
+          "Try navigating to the page again with browser_navigate."
+
+      String.contains?(output, "Extension context invalidated") ->
+        "Browser extension context was invalidated. The extension was likely updated or reloaded. " <>
+          "Reconnect by navigating to the target page with browser_navigate."
+
+      true ->
+        output
+    end
+  end
+
   defp config_overrides(nil), do: []
 
   defp config_overrides(%Viber.Runtime.Config{} = config) do
@@ -526,6 +784,20 @@ defmodule Viber.Runtime.Conversation do
     do: val
 
   defp config_max_iterations(_), do: nil
+
+  defp effective_effort(%Context{effort: effort}) when is_binary(effort), do: effort
+
+  defp effective_effort(%Context{config: %Viber.Runtime.Config{effort: effort}})
+       when is_binary(effort),
+       do: effort
+
+  defp effective_effort(_), do: nil
+
+  defp thinking_mode(%Context{config: %Viber.Runtime.Config{thinking: mode}})
+       when is_binary(mode),
+       do: mode
+
+  defp thinking_mode(_), do: "adaptive"
 
   @auto_compact_threshold 80_000
 

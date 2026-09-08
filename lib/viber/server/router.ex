@@ -9,8 +9,11 @@ defmodule Viber.Server.Router do
 
   use Plug.Router
 
+  require Logger
+
   alias Viber.Server.SessionHandler
 
+  plug(Viber.Server.RequestLogger)
   plug(Viber.Server.CORSPlug)
   plug(:match)
 
@@ -80,6 +83,9 @@ defmodule Viber.Server.Router do
   end
 
   post "/sessions/:id/message" do
+    msg_preview = String.slice(conn.body_params["message"] || "", 0, 80)
+    Logger.info("Router: POST /sessions/#{id}/message msg=#{inspect(msg_preview)}")
+
     case SessionHandler.get_session(id) do
       {:ok, _pid} ->
         Viber.Server.SSE.stream(conn, id, conn.body_params)
@@ -133,6 +139,58 @@ defmodule Viber.Server.Router do
 
           {:error, reason} ->
             send_json(conn, 422, %{error: inspect(reason)})
+        end
+    end
+  end
+
+  post "/sessions/:id/browser_tab_ready" do
+    case SessionHandler.get_session(id) do
+      {:ok, _pid} ->
+        Logger.info("Router: browser_tab_ready session=#{id}")
+        Viber.Runtime.BrowserAction.Broker.notify_tab_ready(id)
+        send_json(conn, 200, %{ok: true})
+
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "Session not found"})
+    end
+  end
+
+  post "/sessions/:id/browser_action_result" do
+    action_id = conn.body_params["action_id"]
+    result = conn.body_params["result"]
+
+    cond do
+      not is_binary(action_id) or action_id == "" ->
+        send_json(conn, 422, %{error: "missing 'action_id'"})
+
+      not is_map(result) ->
+        send_json(conn, 422, %{error: "'result' must be an object"})
+
+      true ->
+        is_error = Map.get(result, "is_error", false)
+        output_bytes = byte_size(Map.get(result, "output", ""))
+
+        Logger.info(
+          "Router: browser_action_result id=#{action_id} session=#{id} is_error=#{is_error} output_bytes=#{output_bytes}"
+        )
+
+        case SessionHandler.get_session(id) do
+          {:ok, _pid} ->
+            case Viber.Runtime.BrowserAction.Broker.resolve(action_id, result, session_id: id) do
+              :ok ->
+                send_json(conn, 200, %{ok: true})
+
+              {:error, :not_found} ->
+                Logger.warning("Router: browser_action_result not_found id=#{action_id}")
+                send_json(conn, 404, %{error: "browser action not found"})
+
+              {:error, :session_mismatch} ->
+                Logger.warning("Router: browser_action_result session_mismatch id=#{action_id}")
+                send_json(conn, 409, %{error: "action belongs to another session"})
+            end
+
+          {:error, :not_found} ->
+            send_json(conn, 404, %{error: "Session not found"})
         end
     end
   end

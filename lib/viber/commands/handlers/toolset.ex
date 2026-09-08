@@ -45,22 +45,7 @@ defmodule Viber.Commands.Handlers.Toolset do
     case Toolsets.parse(name) do
       {:ok, toolset} ->
         enabled = context[:enabled_toolsets]
-
-        new_enabled =
-          cond do
-            enabled == nil ->
-              Toolsets.all_names()
-              |> Enum.filter(fn n -> n != toolset end)
-              |> then(fn rest ->
-                [toolset | rest]
-              end)
-
-            toolset in enabled ->
-              enabled
-
-            true ->
-              [toolset | enabled]
-          end
+        new_enabled = compute_enabled_toolsets(enabled, toolset)
 
         {:update_toolsets, new_enabled}
 
@@ -90,5 +75,14 @@ defmodule Viber.Commands.Handlers.Toolset do
 
   def execute([unknown | _], _context) do
     {:error, "Unknown subcommand: #{unknown}. Use: list, enable <name>, disable <name>, reset"}
+  end
+
+  defp compute_enabled_toolsets(nil, toolset) do
+    rest = Enum.filter(Toolsets.all_names(), fn n -> n != toolset end)
+    [toolset | rest]
+  end
+
+  defp compute_enabled_toolsets(enabled, toolset) do
+    if toolset in enabled, do: enabled, else: [toolset | enabled]
   end
 end

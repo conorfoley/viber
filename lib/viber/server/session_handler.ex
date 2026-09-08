@@ -3,7 +3,7 @@ defmodule Viber.Server.SessionHandler do
   Session lifecycle management for HTTP API.
   """
 
-  alias Viber.Runtime.{Permissions, Session, SessionStore, Usage}
+  alias Viber.Runtime.{Config, Permissions, Session, SessionStore, Usage}
   alias Viber.Server.Interrupts
 
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
@@ -44,6 +44,8 @@ defmodule Viber.Server.SessionHandler do
             mode -> Permissions.mode_from_string(mode)
           end
 
+        {:ok, config} = Config.load()
+
         interrupt_ref = Interrupts.register(session_id)
 
         task =
@@ -56,7 +58,8 @@ defmodule Viber.Server.SessionHandler do
                 event_handler: event_handler,
                 permission_mode: permission_mode,
                 browser_context: browser_context,
-                interrupt: interrupt_ref
+                interrupt: interrupt_ref,
+                config: config
               )
             after
               Interrupts.clear(session_id)
@@ -188,15 +191,19 @@ defmodule Viber.Server.SessionHandler do
         :ok
 
       [] ->
-        if purge? do
-          SessionStore.delete_session(session_id)
-          :ok
-        else
-          case SessionStore.load_session(session_id) do
-            {:ok, _} -> :ok
-            _ -> {:error, :not_found}
-          end
-        end
+        delete_inactive_session(session_id, purge?)
+    end
+  end
+
+  defp delete_inactive_session(session_id, true) do
+    SessionStore.delete_session(session_id)
+    :ok
+  end
+
+  defp delete_inactive_session(session_id, false) do
+    case SessionStore.load_session(session_id) do
+      {:ok, _} -> :ok
+      _ -> {:error, :not_found}
     end
   end
 
@@ -207,24 +214,23 @@ defmodule Viber.Server.SessionHandler do
         {:error, :already_active}
 
       [] ->
-        opts = [
-          id: session_id,
-          name: {:via, Registry, {Viber.SessionRegistry, session_id}}
-        ]
+        start_resumed_session(session_id)
+    end
+  end
 
-        case SessionStore.load_session(session_id) do
-          {:ok, _} ->
-            case DynamicSupervisor.start_child(
-                   Viber.SessionSupervisor,
-                   {__MODULE__, {:resume_child, session_id, opts}}
-                 ) do
-              {:ok, _pid} -> {:ok, %{id: session_id, status: "resumed"}}
-              {:error, reason} -> {:error, reason}
-            end
+  defp start_resumed_session(session_id) do
+    opts = [
+      id: session_id,
+      name: {:via, Registry, {Viber.SessionRegistry, session_id}}
+    ]
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+    with {:ok, _} <- SessionStore.load_session(session_id),
+         {:ok, _pid} <-
+           DynamicSupervisor.start_child(
+             Viber.SessionSupervisor,
+             {__MODULE__, {:resume_child, session_id, opts}}
+           ) do
+      {:ok, %{id: session_id, status: "resumed"}}
     end
   end
 
@@ -339,15 +345,18 @@ defmodule Viber.Server.SessionHandler do
   defp usage_map(%Usage{} = u), do: Viber.Runtime.Event.usage_to_map(u)
 
   defp persisted_usage_map(%{} = m) do
+    input_tokens = m["input_tokens"] || 0
+    output_tokens = m["output_tokens"] || 0
+    cache_creation_tokens = m["cache_creation_tokens"] || 0
+    cache_read_tokens = m["cache_read_tokens"] || 0
+
     %{
-      input_tokens: m["input_tokens"] || 0,
-      output_tokens: m["output_tokens"] || 0,
-      cache_creation_tokens: m["cache_creation_tokens"] || 0,
-      cache_read_tokens: m["cache_read_tokens"] || 0,
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      cache_creation_tokens: cache_creation_tokens,
+      cache_read_tokens: cache_read_tokens,
       turns: m["turns"] || 0,
-      total_tokens:
-        (m["input_tokens"] || 0) + (m["output_tokens"] || 0) +
-          (m["cache_creation_tokens"] || 0) + (m["cache_read_tokens"] || 0)
+      total_tokens: input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens
     }
   end
 

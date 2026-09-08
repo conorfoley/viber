@@ -38,3 +38,9 @@ viber-*.tar
 .idea/
 
 agent_docs/
+
+# Dev log files
+/log/
+
+# Local, untracked change log.
+/CHANGELOG.md

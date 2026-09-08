@@ -28,6 +28,27 @@ defmodule Viber.Runtime.PromptTest do
       assert prompt =~ "Project Instructions"
     end
 
+    @tag :tmp_dir
+    test "lists installed skills with load instructions", %{tmp_dir: tmp_dir} do
+      skill_dir = Path.join([tmp_dir, ".viber", "skills", "demo"])
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        "---\nname: demo\ndescription: Demo skill\n---\nbody"
+      )
+
+      prompt = Prompt.build(project_root: tmp_dir)
+      assert prompt =~ "# Skills"
+      assert prompt =~ "demo: Demo skill"
+      assert prompt =~ "`skill` tool"
+    end
+
+    test "omits skills section when no skills installed" do
+      prompt = Prompt.build(project_root: System.tmp_dir!())
+      refute prompt =~ "# Skills"
+    end
+
     test "custom instructions appear in prompt" do
       prompt = Prompt.build(project_root: System.tmp_dir!(), custom_instructions: "Be concise.")
       assert prompt =~ "# Custom Instructions"

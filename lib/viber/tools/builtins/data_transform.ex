@@ -92,15 +92,7 @@ defmodule Viber.Tools.Builtins.DataTransform do
   end
 
   defp apply_transform("rename", rows, %{"renames" => renames}) when is_map(renames) do
-    renamed =
-      Enum.map(rows, fn row ->
-        Enum.reduce(renames, row, fn {old, new}, acc ->
-          case Map.pop(acc, old) do
-            {nil, acc} -> acc
-            {val, acc} -> Map.put(acc, new, val)
-          end
-        end)
-      end)
+    renamed = Enum.map(rows, &rename_row(&1, renames))
 
     {:ok, format_maps(renamed)}
   end
@@ -118,14 +110,7 @@ defmodule Viber.Tools.Builtins.DataTransform do
       pivoted =
         rows
         |> Enum.group_by(&Map.get(&1, group_col))
-        |> Enum.map(fn {key, group_rows} ->
-          base = %{group_col => key}
-
-          Enum.reduce(group_rows, base, fn row, acc ->
-            pv = to_display(Map.get(row, pivot_col))
-            Map.put(acc, pv, Map.get(row, value_col))
-          end)
-        end)
+        |> Enum.map(&pivot_group(&1, group_col, pivot_col, value_col))
         |> Enum.sort_by(&Map.get(&1, group_col))
 
       all_cols = [group_col | Enum.map(pivot_values, &to_display/1)]
@@ -138,6 +123,24 @@ defmodule Viber.Tools.Builtins.DataTransform do
   defp apply_transform(transform, _rows, _input) do
     {:error,
      "Unknown transform: #{transform}. Supported: group, sort, filter, sample, select, rename, pivot"}
+  end
+
+  defp rename_row(row, renames) do
+    Enum.reduce(renames, row, fn {old, new}, acc ->
+      case Map.pop(acc, old) do
+        {nil, acc} -> acc
+        {val, acc} -> Map.put(acc, new, val)
+      end
+    end)
+  end
+
+  defp pivot_group({key, group_rows}, group_col, pivot_col, value_col) do
+    base = %{group_col => key}
+
+    Enum.reduce(group_rows, base, fn row, acc ->
+      pv = to_display(Map.get(row, pivot_col))
+      Map.put(acc, pv, Map.get(row, value_col))
+    end)
   end
 
   defp compute_aggregate(rows, _col, "count"), do: length(rows)

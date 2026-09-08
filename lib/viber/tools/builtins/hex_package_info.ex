@@ -22,42 +22,44 @@ defmodule Viber.Tools.Builtins.HexPackageInfo do
 
   defp fetch_info(package) do
     case hex_get("/packages/#{URI.encode(package)}") do
-      {:ok, data} ->
-        releases = data["releases"] || []
-        latest = get_in(releases, [Access.at(0), "version"]) || "unknown"
-        docs_url = data["docs_html_url"] || data["html_url"]
-
-        meta = data["meta"] || %{}
-        description = meta["description"] || "No description"
-        licenses = meta["licenses"] || []
-        links = meta["links"] || %{}
-
-        downloads = data["downloads"] || %{}
-        all_downloads = downloads["all"] || 0
-
-        lines = [
-          "# #{package} v#{latest}",
-          "",
-          description,
-          "",
-          "Downloads: #{format_number(all_downloads)}",
-          "Licenses: #{Enum.join(licenses, ", ")}",
-          "Docs: #{docs_url}"
-        ]
-
-        lines =
-          if links != %{} do
-            link_lines = Enum.map(links, fn {k, v} -> "  #{k}: #{v}" end)
-            lines ++ ["Links:" | link_lines]
-          else
-            lines
-          end
-
-        {:ok, Enum.join(lines, "\n")}
-
-      {:error, _} = err ->
-        err
+      {:ok, data} -> {:ok, build_info(package, data)}
+      {:error, _} = err -> err
     end
+  end
+
+  defp build_info(package, data) do
+    releases = data["releases"] || []
+    latest = get_in(releases, [Access.at(0), "version"]) || "unknown"
+    docs_url = data["docs_html_url"] || data["html_url"]
+    meta = data["meta"] || %{}
+
+    base_lines(package, latest, docs_url, meta, data)
+    |> append_links(meta["links"] || %{})
+    |> Enum.join("\n")
+  end
+
+  defp base_lines(package, latest, docs_url, meta, data) do
+    description = meta["description"] || "No description"
+    licenses = meta["licenses"] || []
+    downloads = data["downloads"] || %{}
+    all_downloads = downloads["all"] || 0
+
+    [
+      "# #{package} v#{latest}",
+      "",
+      description,
+      "",
+      "Downloads: #{format_number(all_downloads)}",
+      "Licenses: #{Enum.join(licenses, ", ")}",
+      "Docs: #{docs_url}"
+    ]
+  end
+
+  defp append_links(lines, links) when links == %{}, do: lines
+
+  defp append_links(lines, links) do
+    link_lines = Enum.map(links, fn {k, v} -> "  #{k}: #{v}" end)
+    lines ++ ["Links:" | link_lines]
   end
 
   defp fetch_versions(package) do
@@ -86,48 +88,39 @@ defmodule Viber.Tools.Builtins.HexPackageInfo do
   end
 
   defp fetch_deps(package, version) do
-    version = version || "latest"
+    with {:ok, ver} <- resolve_version(package, version || "latest"),
+         {:ok, data} <- hex_get("/packages/#{URI.encode(package)}/releases/#{URI.encode(ver)}") do
+      {:ok, build_deps(package, ver, data["requirements"] || %{})}
+    end
+  end
 
-    path =
-      if version == "latest" do
-        case hex_get("/packages/#{URI.encode(package)}") do
-          {:ok, data} ->
-            latest = get_in(data, ["releases", Access.at(0), "version"])
-            if latest, do: {:ok, latest}, else: {:error, "No releases found"}
+  defp resolve_version(_package, version) when version != "latest", do: {:ok, version}
 
-          err ->
-            err
-        end
-      else
-        {:ok, version}
-      end
-
-    case path do
-      {:ok, ver} ->
-        case hex_get("/packages/#{URI.encode(package)}/releases/#{URI.encode(ver)}") do
-          {:ok, data} ->
-            requirements = data["requirements"] || %{}
-
-            if requirements == %{} do
-              {:ok, "#{package} v#{ver} has no dependencies"}
-            else
-              dep_lines =
-                Enum.map(requirements, fn {name, req} ->
-                  constraint = req["requirement"] || "any"
-                  optional = if req["optional"], do: " (optional)", else: ""
-                  "  #{name} #{constraint}#{optional}"
-                end)
-
-              {:ok, Enum.join(["Dependencies for #{package} v#{ver}:" | dep_lines], "\n")}
-            end
-
-          {:error, _} = err ->
-            err
+  defp resolve_version(package, "latest") do
+    case hex_get("/packages/#{URI.encode(package)}") do
+      {:ok, data} ->
+        case get_in(data, ["releases", Access.at(0), "version"]) do
+          nil -> {:error, "No releases found"}
+          latest -> {:ok, latest}
         end
 
-      {:error, _} = err ->
+      err ->
         err
     end
+  end
+
+  defp build_deps(package, ver, requirements) when requirements == %{},
+    do: "#{package} v#{ver} has no dependencies"
+
+  defp build_deps(package, ver, requirements) do
+    dep_lines =
+      Enum.map(requirements, fn {name, req} ->
+        constraint = req["requirement"] || "any"
+        optional = if req["optional"], do: " (optional)", else: ""
+        "  #{name} #{constraint}#{optional}"
+      end)
+
+    Enum.join(["Dependencies for #{package} v#{ver}:" | dep_lines], "\n")
   end
 
   defp hex_get(path) do

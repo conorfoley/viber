@@ -7,8 +7,6 @@ defmodule Viber.Runtime.SessionStore do
   import Ecto.Changeset
   import Ecto.Query
 
-  require Logger
-
   alias Viber.Repo
   alias Viber.Runtime.{Session, Usage}
 
@@ -201,6 +199,12 @@ defmodule Viber.Runtime.SessionStore do
 
   defp encode_block({:text, text}), do: %{"type" => "text", "text" => text}
 
+  defp encode_block({:thinking, text, signature}),
+    do: %{"type" => "thinking", "thinking" => text, "signature" => signature}
+
+  defp encode_block({:redacted_thinking, data}),
+    do: %{"type" => "redacted_thinking", "data" => data}
+
   defp encode_block({:tool_use, id, name, input}),
     do: %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
 
@@ -219,6 +223,12 @@ defmodule Viber.Runtime.SessionStore do
   defp decode_role("tool"), do: :tool
 
   defp decode_block(%{"type" => "text", "text" => text}), do: {:text, text}
+
+  defp decode_block(%{"type" => "thinking", "thinking" => text, "signature" => signature}),
+    do: {:thinking, text, signature}
+
+  defp decode_block(%{"type" => "redacted_thinking", "data" => data}),
+    do: {:redacted_thinking, data}
 
   defp decode_block(%{"type" => "tool_use", "id" => id, "name" => name, "input" => input}),
     do: {:tool_use, id, name, input}

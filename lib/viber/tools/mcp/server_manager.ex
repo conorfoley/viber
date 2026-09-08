@@ -81,20 +81,19 @@ defmodule Viber.Tools.MCP.ServerManager do
   end
 
   defp discover_tools(pid, server_name) do
-    case Client.initialize(pid) do
-      {:ok, _} ->
-        Server.notify(pid, "notifications/initialized", %{})
+    with {:ok, _} <- Client.initialize(pid) do
+      Server.notify(pid, "notifications/initialized", %{})
+      register_discovered_tools(pid, server_name)
+    end
+  end
 
-        case Client.list_tools(pid) do
-          {:ok, tools} ->
-            Server.set_tools(pid, tools)
-            specs = Enum.map(tools, fn tool -> mcp_tool_to_spec(server_name, tool) end)
-            Viber.Tools.Registry.register_mcp_tools(server_name, specs)
-            {:ok, length(tools)}
-
-          {:error, _} = err ->
-            err
-        end
+  defp register_discovered_tools(pid, server_name) do
+    case Client.list_tools(pid) do
+      {:ok, tools} ->
+        Server.set_tools(pid, tools)
+        specs = Enum.map(tools, fn tool -> mcp_tool_to_spec(server_name, tool) end)
+        Viber.Tools.Registry.register_mcp_tools(server_name, specs)
+        {:ok, length(tools)}
 
       {:error, _} = err ->
         err

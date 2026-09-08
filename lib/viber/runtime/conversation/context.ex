@@ -14,6 +14,7 @@ defmodule Viber.Runtime.Conversation.Context do
           allowed_tools: MapSet.t(String.t()),
           interrupt: :atomics.atomics_ref() | nil,
           enabled_toolsets: [atom()] | nil,
+          effort: String.t() | nil,
           max_iterations: pos_integer()
         }
 
@@ -26,6 +27,7 @@ defmodule Viber.Runtime.Conversation.Context do
     :event_handler,
     :interrupt,
     :enabled_toolsets,
+    :effort,
     permission_mode: :prompt,
     project_root: ".",
     task_supervisor: Viber.TaskSupervisor,

@@ -10,51 +10,51 @@ defmodule Viber.Tools.Builtins.ImageView do
   def execute(%{"path" => path} = input) do
     include_data = input["include_data"] || false
 
-    case validate_image(path) do
-      :ok ->
-        case File.stat(path) do
-          {:ok, stat} ->
-            ext = Path.extname(path) |> String.downcase()
-            mime = mime_type(ext)
-
-            lines = [
-              "Image: #{path}",
-              "Size: #{format_size(stat.size)}",
-              "Type: #{mime}",
-              "Modified: #{NaiveDateTime.to_string(stat.mtime |> naive_from_erl())}"
-            ]
-
-            lines =
-              if include_data and stat.size <= @max_file_size do
-                case File.read(path) do
-                  {:ok, data} ->
-                    b64 = Base.encode64(data)
-                    lines ++ ["", "Base64 (#{String.length(b64)} chars):", b64]
-
-                  {:error, reason} ->
-                    lines ++ ["", "(Failed to read file data: #{reason})"]
-                end
-              else
-                if include_data and stat.size > @max_file_size do
-                  lines ++
-                    ["", "(File too large to include inline, max #{format_size(@max_file_size)})"]
-                else
-                  lines
-                end
-              end
-
-            {:ok, Enum.join(lines, "\n")}
-
-          {:error, reason} ->
-            {:error, "Failed to read file metadata: #{reason}"}
-        end
-
-      {:error, _} = err ->
-        err
+    with :ok <- validate_image(path),
+         {:ok, stat} <- stat_with_error(path) do
+      lines = base_lines(path, stat)
+      lines = lines ++ data_section(include_data, path, stat.size)
+      {:ok, Enum.join(lines, "\n")}
     end
   end
 
   def execute(_), do: {:error, "Missing required parameter: path"}
+
+  defp stat_with_error(path) do
+    case File.stat(path) do
+      {:ok, stat} -> {:ok, stat}
+      {:error, reason} -> {:error, "Failed to read file metadata: #{reason}"}
+    end
+  end
+
+  defp base_lines(path, stat) do
+    ext = Path.extname(path) |> String.downcase()
+    mime = mime_type(ext)
+
+    [
+      "Image: #{path}",
+      "Size: #{format_size(stat.size)}",
+      "Type: #{mime}",
+      "Modified: #{NaiveDateTime.to_string(stat.mtime |> naive_from_erl())}"
+    ]
+  end
+
+  defp data_section(false, _path, _size), do: []
+
+  defp data_section(true, path, size) when size <= @max_file_size do
+    case File.read(path) do
+      {:ok, data} ->
+        b64 = Base.encode64(data)
+        ["", "Base64 (#{String.length(b64)} chars):", b64]
+
+      {:error, reason} ->
+        ["", "(Failed to read file data: #{reason})"]
+    end
+  end
+
+  defp data_section(true, _path, _size) do
+    ["", "(File too large to include inline, max #{format_size(@max_file_size)})"]
+  end
 
   defp validate_image(path) do
     ext = Path.extname(path) |> String.downcase()

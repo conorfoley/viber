@@ -83,7 +83,7 @@ defmodule Viber.Scheduler.Runner do
 
   defp run_script(job) do
     script = job.payload["script"] || ""
-    timeout = (job.payload["timeout"] || 60) * 1_000
+    timeout = normalize_script_timeout(job.payload["timeout"])
 
     case System.cmd("sh", ["-c", script],
            stderr_to_stdout: true,
@@ -159,14 +159,14 @@ defmodule Viber.Scheduler.Runner do
 
   defp alert_triggered?(%{"condition" => "row_count_gt", "threshold" => threshold}, output) do
     case Regex.run(~r/(\d+) row\(s\)/, output) do
-      [_, count_str] -> String.to_integer(count_str) > threshold
+      [_, count_str] -> String.to_integer(count_str) > normalize_threshold(threshold)
       _ -> false
     end
   end
 
   defp alert_triggered?(%{"condition" => "row_count_eq", "threshold" => threshold}, output) do
     case Regex.run(~r/(\d+) row\(s\)/, output) do
-      [_, count_str] -> String.to_integer(count_str) == threshold
+      [_, count_str] -> String.to_integer(count_str) == normalize_threshold(threshold)
       _ -> false
     end
   end
@@ -182,4 +182,28 @@ defmodule Viber.Scheduler.Runner do
   end
 
   defp maybe_alert_on_failure(_, _), do: :ok
+
+  defp normalize_script_timeout(nil), do: 60_000
+
+  defp normalize_script_timeout(val) when is_integer(val), do: val * 1_000
+
+  defp normalize_script_timeout(val) when is_binary(val) do
+    case Integer.parse(val) do
+      {n, _} -> n * 1_000
+      :error -> 60_000
+    end
+  end
+
+  defp normalize_script_timeout(_), do: 60_000
+
+  defp normalize_threshold(val) when is_integer(val), do: val
+
+  defp normalize_threshold(val) when is_binary(val) do
+    case Integer.parse(val) do
+      {n, _} -> n
+      :error -> 0
+    end
+  end
+
+  defp normalize_threshold(_), do: 0
 end

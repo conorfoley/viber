@@ -40,12 +40,12 @@ defmodule Viber.Tools.MCP.ProtocolTest do
       Jason.encode!(%{
         "jsonrpc" => "2.0",
         "id" => 1,
-        "error" => %{"code" => -32600, "message" => "Invalid request"}
+        "error" => %{"code" => -32_600, "message" => "Invalid request"}
       })
 
     assert {:ok, msg} = Protocol.decode_message(json)
     assert msg.type == :error_response
-    assert msg.error["code"] == -32600
+    assert msg.error["code"] == -32_600
   end
 
   test "decode_message handles notification" do

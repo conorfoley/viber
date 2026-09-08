@@ -112,7 +112,6 @@ defmodule Viber.Tools.Builtins.DataExport do
   defp normalize_json_value(%Decimal{} = d), do: Decimal.to_string(d)
   defp normalize_json_value(val), do: val
 
-  defp to_string_safe(nil), do: ""
   defp to_string_safe(val) when is_binary(val), do: val
   defp to_string_safe(val), do: inspect(val)
 end

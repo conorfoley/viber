@@ -12,6 +12,8 @@ defmodule Viber.HotReloader do
 
   use GenServer
 
+  require Logger
+
   @debounce_ms 300
 
   @type state :: %{
@@ -142,27 +144,36 @@ defmodule Viber.HotReloader do
     ebin_dir
     |> Path.join("*.beam")
     |> Path.wildcard()
-    |> Enum.flat_map(fn beam_path ->
-      current_mtime = beam_path |> File.stat!() |> Map.get(:mtime)
-      old_mtime = Map.get(before_mtimes, beam_path)
+    |> Enum.flat_map(&maybe_reload_beam(&1, before_mtimes))
+  end
 
-      if old_mtime != current_mtime do
-        module =
-          beam_path
-          |> Path.basename(".beam")
-          |> String.to_atom()
+  defp maybe_reload_beam(beam_path, before_mtimes) do
+    current_mtime = beam_path |> File.stat!() |> Map.get(:mtime)
+    old_mtime = Map.get(before_mtimes, beam_path)
 
-        abs_path = beam_path |> Path.rootname() |> String.to_charlist()
+    if old_mtime != current_mtime do
+      reload_beam_file(beam_path)
+    else
+      []
+    end
+  end
 
-        :code.purge(module)
+  defp reload_beam_file(beam_path) do
+    abs_path = beam_path |> Path.rootname() |> String.to_charlist()
 
-        case :code.load_abs(abs_path) do
-          {:module, ^module} -> [module]
-          _ -> []
-        end
-      else
-        []
+    try do
+      module = beam_path |> Path.basename(".beam") |> String.to_existing_atom()
+
+      :code.purge(module)
+
+      case :code.load_abs(abs_path) do
+        {:module, ^module} -> [module]
+        _ -> []
       end
-    end)
+    rescue
+      ArgumentError ->
+        Logger.warning("HotReloader: skipping unknown module in #{beam_path}")
+        []
+    end
   end
 end

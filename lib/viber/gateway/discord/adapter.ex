@@ -79,12 +79,7 @@ defmodule Viber.Gateway.Discord.Adapter do
 
   defp send_interaction_followup(app_id, token, [first | rest]) do
     with :ok <- Client.create_followup(app_id, token, first) do
-      Enum.reduce_while(rest, :ok, fn chunk, _acc ->
-        case Client.create_followup(app_id, token, chunk) do
-          :ok -> {:cont, :ok}
-          {:error, _} = err -> {:halt, err}
-        end
-      end)
+      reduce_chunks(rest, fn chunk -> Client.create_followup(app_id, token, chunk) end)
     end
   end
 
@@ -92,12 +87,18 @@ defmodule Viber.Gateway.Discord.Adapter do
 
   defp send_to_channel(config, channel_id, [first | rest]) do
     with :ok <- Client.send_channel_message(config.bot_token, channel_id, first) do
-      Enum.reduce_while(rest, :ok, fn chunk, _acc ->
-        case Client.send_channel_message(config.bot_token, channel_id, chunk) do
-          :ok -> {:cont, :ok}
-          {:error, _} = err -> {:halt, err}
-        end
+      reduce_chunks(rest, fn chunk ->
+        Client.send_channel_message(config.bot_token, channel_id, chunk)
       end)
     end
+  end
+
+  defp reduce_chunks(chunks, send_fn) do
+    Enum.reduce_while(chunks, :ok, fn chunk, _acc ->
+      case send_fn.(chunk) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
   end
 end

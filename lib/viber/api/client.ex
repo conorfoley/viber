@@ -11,9 +11,10 @@ defmodule Viber.API.Client do
   @type provider_kind :: :anthropic | :openai | :xai | :ollama
 
   @model_aliases %{
-    "opus" => "claude-opus-4-6",
-    "sonnet" => "claude-sonnet-4-6",
-    "haiku" => "claude-haiku-4-5-20251213",
+    "fable" => "claude-fable-5",
+    "opus" => "claude-opus-5",
+    "sonnet" => "claude-sonnet-5",
+    "haiku" => "claude-haiku-4-5",
     "grok" => "grok-3",
     "grok-mini" => "grok-3-mini",
     "gpt4o" => "gpt-4o",
@@ -45,22 +46,22 @@ defmodule Viber.API.Client do
   def detect_provider(model) do
     model = resolve_model_alias(model)
 
+    detect_provider_by_prefix(model) || detect_provider_by_env()
+  end
+
+  defp detect_provider_by_prefix(model) do
     cond do
-      String.starts_with?(model, "ollama:") ->
-        :ollama
+      String.starts_with?(model, "ollama:") -> :ollama
+      String.starts_with?(model, "claude") -> :anthropic
+      String.starts_with?(model, "grok") -> :xai
+      String.starts_with?(model, "gpt-") -> :openai
+      String.match?(model, ~r/^o\d/) -> :openai
+      true -> nil
+    end
+  end
 
-      String.starts_with?(model, "claude") ->
-        :anthropic
-
-      String.starts_with?(model, "grok") ->
-        :xai
-
-      String.starts_with?(model, "gpt-") ->
-        :openai
-
-      String.match?(model, ~r/^o\d/) ->
-        :openai
-
+  defp detect_provider_by_env do
+    cond do
       env_key_set?("ANTHROPIC_API_KEY") ->
         :anthropic
 
@@ -80,6 +81,10 @@ defmodule Viber.API.Client do
   end
 
   @model_max_tokens %{
+    "claude-fable-5" => 64_000,
+    "claude-opus-5" => 64_000,
+    "claude-sonnet-5" => 64_000,
+    "claude-haiku-4-5" => 64_000,
     "claude-opus-4-6" => 32_000,
     "claude-sonnet-4-6" => 64_000,
     "claude-haiku-4-5-20251213" => 64_000,
@@ -96,13 +101,122 @@ defmodule Viber.API.Client do
   def max_tokens_for_model(model) do
     canonical = resolve_model_alias(model)
 
+    if String.starts_with?(canonical, "ollama:") do
+      nil
+    else
+      Map.get(@model_max_tokens, canonical, 64_000)
+    end
+  end
+
+  @adaptive_thinking_summarized ~w[
+    claude-fable-5
+    claude-mythos
+    claude-opus-5
+    claude-opus-4-8
+    claude-opus-4-7
+    claude-sonnet-5
+  ]
+
+  @adaptive_thinking_basic ~w[claude-opus-4-6 claude-sonnet-4-6]
+
+  @effort_levels ~w[low medium high xhigh max]
+
+  @doc """
+  Returns the effort levels accepted by `output_config/2`.
+  """
+  @spec effort_levels() :: [String.t()]
+  def effort_levels, do: @effort_levels
+
+  @thinking_modes ~w[adaptive off]
+
+  @doc """
+  Returns the thinking modes accepted by `thinking_config/3`.
+  """
+  @spec thinking_modes() :: [String.t()]
+  def thinking_modes, do: @thinking_modes
+
+  @doc """
+  Returns the `thinking` request parameter for a model, or `nil` when the
+  parameter should be omitted.
+
+  With mode `"adaptive"` (the default), adaptive thinking is enabled on
+  models that support it. Models with an omitted-by-default thinking display
+  get `display: "summarized"` so reasoning can be streamed to the user.
+  Note that `display` controls visibility only — thinking is billed the same
+  whatever the display setting.
+
+  With mode `"off"`, thinking is disabled where the API allows it:
+
+    * Opus 5 / Sonnet 5 — sent as `{type: "disabled"}`. Opus 5 rejects
+      `disabled` at effort `xhigh`/`max`, so adaptive is kept there.
+    * Opus 4.8 / 4.7 / 4.6, Sonnet 4.6 — the parameter is omitted, which
+      runs those models without thinking.
+    * Fable 5 / Mythos 5 — thinking is always on and cannot be disabled;
+      the parameter is omitted (which runs adaptive).
+
+  Prefer lowering `effort` over turning thinking off: disabled thinking can
+  degrade tool-call reliability on current models.
+  """
+  @spec thinking_config(String.t(), String.t(), String.t() | nil) :: map() | nil
+  def thinking_config(model, mode \\ "adaptive", effort \\ nil)
+
+  def thinking_config(model, "off", effort) do
+    canonical = resolve_model_alias(model)
+
     cond do
-      String.starts_with?(canonical, "ollama:") ->
-        nil
+      String.starts_with?(canonical, "claude-opus-5") and effort in ["xhigh", "max"] ->
+        %{type: "adaptive", display: "summarized"}
+
+      prefix_match?(canonical, ["claude-opus-5", "claude-sonnet-5"]) ->
+        %{type: "disabled"}
 
       true ->
-        Map.get(@model_max_tokens, canonical, 64_000)
+        nil
     end
+  end
+
+  def thinking_config(model, _mode, _effort) do
+    canonical = resolve_model_alias(model)
+
+    cond do
+      prefix_match?(canonical, @adaptive_thinking_summarized) ->
+        %{type: "adaptive", display: "summarized"}
+
+      prefix_match?(canonical, @adaptive_thinking_basic) ->
+        %{type: "adaptive"}
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
+  Returns the `output_config` request parameter carrying the effort level,
+  or `nil` when no effort is requested or the model does not support it.
+  """
+  @spec output_config(String.t(), String.t() | nil) :: map() | nil
+  def output_config(_model, nil), do: nil
+
+  def output_config(model, effort) when is_binary(effort) do
+    canonical = resolve_model_alias(model)
+
+    cond do
+      effort not in @effort_levels ->
+        nil
+
+      prefix_match?(canonical, @adaptive_thinking_summarized) ->
+        %{effort: effort}
+
+      prefix_match?(canonical, @adaptive_thinking_basic) ->
+        %{effort: if(effort == "xhigh", do: "high", else: effort)}
+
+      true ->
+        nil
+    end
+  end
+
+  defp prefix_match?(model, prefixes) do
+    Enum.any?(prefixes, &String.starts_with?(model, &1))
   end
 
   @spec from_model(String.t()) :: {:ok, provider_kind(), module()}
@@ -123,7 +237,7 @@ defmodule Viber.API.Client do
 
     with {:ok, _kind, module} <- from_model(model) do
       request = apply_config_overrides(request, opts)
-      send_with_retry(module, request)
+      send_with_retry(module, request, opts)
     end
   end
 

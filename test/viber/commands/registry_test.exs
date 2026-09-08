@@ -4,7 +4,7 @@ defmodule Viber.Commands.RegistryTest do
   alias Viber.Commands.Registry
 
   test "all/0 returns non-empty list" do
-    assert length(Registry.all()) > 0
+    assert Registry.all() != []
   end
 
   test "get/1 finds known commands" do

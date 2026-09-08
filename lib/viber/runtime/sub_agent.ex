@@ -4,6 +4,17 @@ defmodule Viber.Runtime.SubAgent do
 
   Sub-agents inherit model, config, project_root, permission_mode, and provider from the
   parent context but start with a fresh session (no conversation history).
+
+  Two roles are supported:
+
+    * `"worker"` (default) — executes the given task.
+    * `"reviewer"` — independently verifies completed work. The reviewer is
+      instructed to gather its own evidence (re-run tests, read files) rather
+      than trust the worker's summary, and to end with a `VERDICT: passed` or
+      `VERDICT: failed` line that may contradict the worker's claims.
+
+  An optional `"effort"` (low | medium | high | xhigh | max) tunes the
+  sub-agent's reasoning depth; use `"low"` for cheap scouting subtasks.
   """
 
   require Logger
@@ -16,10 +27,25 @@ defmodule Viber.Runtime.SubAgent do
           iterations: non_neg_integer()
         }
 
+  @reviewer_preamble """
+  You are an independent reviewer. Another agent claims to have completed the
+  work described below. Your job is to deliver a verdict on whether the work
+  actually succeeded:
+  - Gather your own evidence: read the relevant files, run the tests, check
+    diagnostics. Do not trust the worker's summary or claimed results.
+  - Judge against the stated goal or proof, not against effort expended.
+  - Your verdict may contradict the worker's claims; say so plainly if it does.
+  - End your response with a final line of exactly "VERDICT: passed" or
+    "VERDICT: failed", preceded by a short justification citing the evidence
+    you inspected.
+  """
+
   @spec run(map(), Context.t()) :: {:ok, result()} | {:error, term()}
   def run(%{"task" => task} = input, %Context{} = parent_ctx) do
     model = Map.get(input, "model", parent_ctx.model)
     extra_context = Map.get(input, "context", "")
+    role = Map.get(input, "role", "worker")
+    effort = Map.get(input, "effort")
 
     user_input =
       if extra_context != "" do
@@ -28,8 +54,18 @@ defmodule Viber.Runtime.SubAgent do
         task
       end
 
+    user_input =
+      if role == "reviewer" do
+        "#{@reviewer_preamble}\n<work_to_review>\n#{user_input}\n</work_to_review>"
+      else
+        user_input
+      end
+
     sub_agent_id = generate_id()
-    Logger.info("SubAgent: spawning id=#{sub_agent_id} task=#{String.slice(task, 0..80)}")
+
+    Logger.info(
+      "SubAgent: spawning id=#{sub_agent_id} role=#{role} task=#{String.slice(task, 0..80)}"
+    )
 
     {:ok, session} =
       Session.start_link(
@@ -49,6 +85,7 @@ defmodule Viber.Runtime.SubAgent do
           permission_mode: parent_ctx.permission_mode,
           project_root: parent_ctx.project_root,
           provider_module: parent_ctx.provider_module,
+          effort: effort,
           user_input: user_input
         )
       after

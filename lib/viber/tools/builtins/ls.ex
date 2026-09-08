@@ -20,30 +20,30 @@ defmodule Viber.Tools.Builtins.LS do
 
   def execute(_), do: {:error, "Missing required parameter: path"}
 
+  defp build_tree(_dir, depth, max_depth, _ignore) when depth >= max_depth, do: ""
+
   defp build_tree(dir, depth, max_depth, ignore) do
-    if depth >= max_depth do
-      ""
+    case File.ls(dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort()
+        |> Enum.reject(fn entry -> ignored?(entry, ignore) end)
+        |> Enum.map_join("\n", fn entry -> render_entry(dir, entry, depth, max_depth, ignore) end)
+
+      {:error, reason} ->
+        "Error listing #{dir}: #{inspect(reason)}"
+    end
+  end
+
+  defp render_entry(dir, entry, depth, max_depth, ignore) do
+    full_path = Path.join(dir, entry)
+    prefix = String.duplicate("  ", depth)
+
+    if File.dir?(full_path) do
+      subtree = build_tree(full_path, depth + 1, max_depth, ignore)
+      "#{prefix}#{entry}/\n#{subtree}"
     else
-      case File.ls(dir) do
-        {:ok, entries} ->
-          entries
-          |> Enum.sort()
-          |> Enum.reject(fn entry -> ignored?(entry, ignore) end)
-          |> Enum.map_join("\n", fn entry ->
-            full_path = Path.join(dir, entry)
-            prefix = String.duplicate("  ", depth)
-
-            if File.dir?(full_path) do
-              subtree = build_tree(full_path, depth + 1, max_depth, ignore)
-              "#{prefix}#{entry}/\n#{subtree}"
-            else
-              "#{prefix}#{entry}"
-            end
-          end)
-
-        {:error, reason} ->
-          "Error listing #{dir}: #{inspect(reason)}"
-      end
+      "#{prefix}#{entry}"
     end
   end
 

@@ -56,6 +56,22 @@ defmodule Viber.Commands.Registry do
       handler: Handlers.Model
     },
     %{
+      name: "effort",
+      aliases: [],
+      description: "Show or set reasoning effort (low|medium|high|xhigh|max)",
+      usage: "/effort [level|reset]",
+      category: :config,
+      handler: Handlers.Effort
+    },
+    %{
+      name: "thinking",
+      aliases: [],
+      description: "Show or set thinking mode (adaptive|off)",
+      usage: "/thinking [mode|reset]",
+      category: :config,
+      handler: Handlers.Thinking
+    },
+    %{
       name: "clear",
       aliases: [],
       description: "Clear session history",

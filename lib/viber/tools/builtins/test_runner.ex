@@ -81,18 +81,62 @@ defmodule Viber.Tools.Builtins.TestRunner do
   defp status_from_exit_code(_), do: "error"
 
   defp parse_summary(output) do
+    parse_standard_summary(output) || parse_custom_summary(output)
+  end
+
+  defp parse_standard_summary(output) do
     case Regex.run(~r/(\d+) tests?, (\d+) failures?(?:, (\d+) skipped)?/, output) do
       [_, tests, failures | rest] ->
-        skipped = List.first(rest)
-
-        parts = ["Tests: #{tests}", "Failures: #{failures}"]
-        parts = if skipped, do: parts ++ ["Skipped: #{skipped}"], else: parts
-        Enum.join(parts, "  ")
+        build_summary(tests, failures, List.first(rest))
 
       nil ->
         nil
     end
   end
+
+  defp parse_custom_summary(output) do
+    cond do
+      match = Regex.run(~r{Result: (\d+)/(\d+) passed}, output) ->
+        [passed, total] = match |> tl() |> Enum.map(&to_int/1)
+
+        failed =
+          case Regex.run(~r/Failed: (\d+) tests?/, output) do
+            [_, f] -> to_int(f)
+            nil -> total - passed
+          end
+
+        skipped = total - passed - failed
+        build_summary(total, failed, nil_if_zero(skipped))
+
+      match = Regex.run(~r/Result: (\d+) passed(?:, (\d+) skipped)?/, output) ->
+        [passed | rest] = match |> tl() |> Enum.map(&to_int/1)
+        skipped = List.first(rest) || 0
+        failed = parse_custom_failed(output)
+        build_summary(passed + skipped + failed, failed, nil_if_zero(skipped))
+
+      true ->
+        nil
+    end
+  end
+
+  defp build_summary(tests, failures, skipped) do
+    parts = ["Tests: #{tests}", "Failures: #{failures}"]
+    parts = if skipped, do: parts ++ ["Skipped: #{skipped}"], else: parts
+    Enum.join(parts, "  ")
+  end
+
+  defp parse_custom_failed(output) do
+    case Regex.run(~r/Failed: (\d+) tests?/, output) do
+      [_, f] -> to_int(f)
+      nil -> 0
+    end
+  end
+
+  defp to_int(nil), do: nil
+  defp to_int(str), do: String.to_integer(str)
+
+  defp nil_if_zero(n) when n > 0, do: n
+  defp nil_if_zero(_), do: nil
 
   defp parse_failures(output) do
     case Regex.run(~r/\n(\s+\d+\) .+?)(?:\n\nFinished|\nRandomized|\z)/s, output) do

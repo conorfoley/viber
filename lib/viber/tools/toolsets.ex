@@ -19,7 +19,7 @@ defmodule Viber.Tools.Toolsets do
       label: "Core",
       description: "File system, search, and shell tools (always enabled)",
       tools:
-        ~w[bash read_file write_file edit_file multi_edit glob_search grep_search ls spawn_agent]
+        ~w[bash read_file write_file edit_file multi_edit glob_search grep_search ls spawn_agent skill]
     },
     %{
       name: :web,
@@ -51,6 +51,14 @@ defmodule Viber.Tools.Toolsets do
       label: "System",
       description: "Clipboard, JSON processing, and user interaction tools",
       tools: ~w[clipboard jq user_input]
+    },
+    %{
+      name: :browser,
+      label: "Browser",
+      description:
+        "Browser accessibility tools for interacting with web pages via the Viber browser extension",
+      tools:
+        ~w[browser_click browser_type browser_scroll browser_navigate browser_focus browser_get_accessibility_tree browser_wait_for_load]
     }
   ]
 

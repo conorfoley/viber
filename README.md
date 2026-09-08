@@ -1,6 +1,8 @@
 # Viber
 
-An AI-powered coding assistant built in Elixir. Viber provides an interactive CLI/REPL and an HTTP/SSE server for LLM-driven coding workflows — file editing, shell commands, database queries, scheduled jobs, and more — all managed through a conversational interface with a fine-grained permission system.
+> *If the web can't do it, Viber can build you a webapp that can.*
+
+Viber is a full **Web Accessibility and Coding Assistant** built in Elixir/OTP. It navigates and interprets live web pages, audits accessibility, extracts content, and interacts with the browser — and when the web falls short, it scaffolds or builds the webapp you need. It also provides a powerful interactive CLI/REPL and HTTP/SSE server for LLM-driven coding workflows: file editing, shell commands, database queries, scheduled jobs, and more, all managed through a conversational interface with a fine-grained permission system.
 
 ## Features
 

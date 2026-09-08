@@ -13,40 +13,41 @@ defmodule Viber.Commands.Handlers.Attach do
   end
 
   def execute(args, context) do
-    session = context[:session]
+    case context[:session] do
+      nil -> {:error, "No active session"}
+      session -> attach_files(args, context, session)
+    end
+  end
 
-    if session do
-      project_root = context[:project_root] || File.cwd!()
+  defp attach_files(args, context, session) do
+    project_root = context[:project_root] || File.cwd!()
+    results = Enum.flat_map(args, &FileRefs.resolve_pattern(&1, project_root))
+    {combined, errors} = FileRefs.format_results(results)
 
-      results =
-        args
-        |> Enum.flat_map(&FileRefs.resolve_pattern(&1, project_root))
-
-      {combined, errors} = FileRefs.format_results(results)
-
-      if combined == "" do
-        {:error, Enum.join(errors, "\n")}
-      else
-        ok_paths =
-          results
-          |> Enum.filter(fn {tag, _, _} -> tag == :ok end)
-          |> Enum.map(fn {:ok, path, _} -> path end)
-
-        message = %{role: :user, blocks: [{:text, combined}], usage: nil}
-        :ok = Session.add_message(session, message)
-
-        count = length(ok_paths)
-        paths_str = Enum.join(ok_paths, ", ")
-        summary = "Attached #{count} file(s): #{paths_str}"
-
-        if errors == [] do
-          {:ok, summary}
-        else
-          {:ok, summary <> "\n" <> Enum.join(errors, "\n")}
-        end
-      end
+    if combined == "" do
+      {:error, Enum.join(errors, "\n")}
     else
-      {:error, "No active session"}
+      record_attachment(session, combined, errors, results)
+    end
+  end
+
+  defp record_attachment(session, combined, errors, results) do
+    ok_paths =
+      results
+      |> Enum.filter(fn {tag, _, _} -> tag == :ok end)
+      |> Enum.map(fn {:ok, path, _} -> path end)
+
+    message = %{role: :user, blocks: [{:text, combined}], usage: nil}
+    :ok = Session.add_message(session, message)
+
+    count = length(ok_paths)
+    paths_str = Enum.join(ok_paths, ", ")
+    summary = "Attached #{count} file(s): #{paths_str}"
+
+    if errors == [] do
+      {:ok, summary}
+    else
+      {:ok, summary <> "\n" <> Enum.join(errors, "\n")}
     end
   end
 end

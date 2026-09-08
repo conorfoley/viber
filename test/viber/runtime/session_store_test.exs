@@ -72,6 +72,27 @@ defmodule Viber.Runtime.SessionStoreTest do
       assert decoded.usage.input_tokens == 10
     end
 
+    test "message with thinking and redacted_thinking blocks" do
+      msg = %{
+        role: :assistant,
+        blocks: [
+          {:thinking, "reasoning here", "sig_abc"},
+          {:redacted_thinking, "opaque_data"},
+          {:text, "answer"}
+        ],
+        usage: nil
+      }
+
+      encoded = SessionStore.encode_message(msg)
+      decoded = SessionStore.decode_message(encoded)
+
+      assert [
+               {:thinking, "reasoning here", "sig_abc"},
+               {:redacted_thinking, "opaque_data"},
+               {:text, "answer"}
+             ] = decoded.blocks
+    end
+
     test "message with tool_result block" do
       msg = %{
         role: :tool,

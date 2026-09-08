@@ -19,6 +19,32 @@ defmodule Viber.Runtime.ConfigTest do
   end
 
   @tag :tmp_dir
+  test "loads effort and thinking, rejecting invalid values", %{tmp_dir: tmp_dir} do
+    viber_dir = Path.join(tmp_dir, ".viber")
+    File.mkdir_p!(viber_dir)
+
+    File.write!(
+      Path.join(viber_dir, "settings.json"),
+      Jason.encode!(%{"effort" => "low", "thinking" => "off"})
+    )
+
+    {:ok, config} = Config.load(project_root: tmp_dir)
+    assert config.effort == "low"
+    assert config.thinking == "off"
+    assert Config.get(config, "effort") == "low"
+    assert Config.get(config, "thinking") == "off"
+
+    File.write!(
+      Path.join(viber_dir, "settings.json"),
+      Jason.encode!(%{"effort" => "turbo", "thinking" => "sometimes"})
+    )
+
+    {:ok, config} = Config.load(project_root: tmp_dir)
+    assert config.effort == nil
+    assert config.thinking == nil
+  end
+
+  @tag :tmp_dir
   test "loads provider and base_url from config file", %{tmp_dir: tmp_dir} do
     viber_dir = Path.join(tmp_dir, ".viber")
     File.mkdir_p!(viber_dir)

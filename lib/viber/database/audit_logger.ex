@@ -12,14 +12,7 @@ defmodule Viber.Database.AuditLogger do
   @spec log_query(map()) :: :ok
   def log_query(attrs) do
     if repo_available?() do
-      Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
-        changeset = QueryLog.changeset(%QueryLog{}, attrs)
-
-        case Repo.insert(changeset) do
-          {:ok, _} -> :ok
-          {:error, cs} -> Logger.debug("Failed to log query: #{inspect(cs.errors)}")
-        end
-      end)
+      Task.Supervisor.start_child(Viber.TaskSupervisor, fn -> insert_query_log(attrs) end)
     else
       Logger.info(
         "Query audit: #{attrs[:connection_name]} | #{attrs[:query_type]} | #{attrs[:execution_time_ms]}ms | #{attrs[:status]}"
@@ -66,5 +59,14 @@ defmodule Viber.Database.AuditLogger do
 
   defp repo_available? do
     Application.get_env(:viber, :enable_repo, true) && Process.whereis(Viber.Repo) != nil
+  end
+
+  defp insert_query_log(attrs) do
+    changeset = QueryLog.changeset(%QueryLog{}, attrs)
+
+    case Repo.insert(changeset) do
+      {:ok, _} -> :ok
+      {:error, cs} -> Logger.debug("Failed to log query: #{inspect(cs.errors)}")
+    end
   end
 end

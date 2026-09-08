@@ -24,6 +24,8 @@ defmodule Viber.Runtime.Config do
           api_key: String.t() | nil,
           permission_mode: atom() | nil,
           max_iterations: pos_integer() | nil,
+          effort: String.t() | nil,
+          thinking: String.t() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
           custom_instructions: String.t() | nil,
@@ -36,6 +38,8 @@ defmodule Viber.Runtime.Config do
             api_key: nil,
             permission_mode: nil,
             max_iterations: nil,
+            effort: nil,
+            thinking: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
             custom_instructions: nil,
@@ -64,19 +68,27 @@ defmodule Viber.Runtime.Config do
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = base, %__MODULE__{} = override) do
     %__MODULE__{
-      model: override.model || base.model,
-      provider: override.provider || base.provider,
-      base_url: override.base_url || base.base_url,
-      api_key: override.api_key || base.api_key,
-      permission_mode: override.permission_mode || base.permission_mode,
-      max_iterations: override.max_iterations || base.max_iterations,
+      model: coalesce(override.model, base.model),
+      provider: coalesce(override.provider, base.provider),
+      base_url: coalesce(override.base_url, base.base_url),
+      api_key: coalesce(override.api_key, base.api_key),
+      permission_mode: coalesce(override.permission_mode, base.permission_mode),
+      max_iterations: coalesce(override.max_iterations, base.max_iterations),
+      effort: coalesce(override.effort, base.effort),
+      thinking: coalesce(override.thinking, base.thinking),
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
-      hooks: %{
-        pre_tool_use: base.hooks.pre_tool_use ++ override.hooks.pre_tool_use,
-        post_tool_use: base.hooks.post_tool_use ++ override.hooks.post_tool_use
-      },
-      custom_instructions: override.custom_instructions || base.custom_instructions,
+      hooks: merge_hooks(base.hooks, override.hooks),
+      custom_instructions: coalesce(override.custom_instructions, base.custom_instructions),
       loaded_entries: base.loaded_entries ++ override.loaded_entries
+    }
+  end
+
+  defp coalesce(override_value, base_value), do: override_value || base_value
+
+  defp merge_hooks(base_hooks, override_hooks) do
+    %{
+      pre_tool_use: base_hooks.pre_tool_use ++ override_hooks.pre_tool_use,
+      post_tool_use: base_hooks.post_tool_use ++ override_hooks.post_tool_use
     }
   end
 
@@ -109,19 +121,21 @@ defmodule Viber.Runtime.Config do
 
   @spec get(t(), String.t()) :: term()
   def get(%__MODULE__{} = config, path) do
-    case String.split(path, ".") do
-      ["model"] -> config.model
-      ["provider"] -> config.provider
-      ["baseUrl"] -> config.base_url
-      ["permissionMode"] -> config.permission_mode
-      ["customInstructions"] -> config.custom_instructions
-      ["maxIterations"] -> config.max_iterations
-      ["mcpServers"] -> config.mcp_servers
-      ["mcpServers", name] -> Map.get(config.mcp_servers, name)
-      ["hooks"] -> config.hooks
-      _ -> nil
-    end
+    get_by_segments(config, String.split(path, "."))
   end
+
+  defp get_by_segments(config, ["model"]), do: config.model
+  defp get_by_segments(config, ["provider"]), do: config.provider
+  defp get_by_segments(config, ["baseUrl"]), do: config.base_url
+  defp get_by_segments(config, ["permissionMode"]), do: config.permission_mode
+  defp get_by_segments(config, ["customInstructions"]), do: config.custom_instructions
+  defp get_by_segments(config, ["maxIterations"]), do: config.max_iterations
+  defp get_by_segments(config, ["effort"]), do: config.effort
+  defp get_by_segments(config, ["thinking"]), do: config.thinking
+  defp get_by_segments(config, ["mcpServers"]), do: config.mcp_servers
+  defp get_by_segments(config, ["mcpServers", name]), do: Map.get(config.mcp_servers, name)
+  defp get_by_segments(config, ["hooks"]), do: config.hooks
+  defp get_by_segments(_config, _segments), do: nil
 
   defp discover(project_root) do
     user_path = user_config_path()
@@ -155,6 +169,8 @@ defmodule Viber.Runtime.Config do
       api_key: data["apiKey"],
       permission_mode: parse_permission_mode(data["permissions"]),
       max_iterations: parse_max_iterations(data["maxIterations"]),
+      effort: parse_effort(data["effort"]),
+      thinking: parse_thinking(data["thinking"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),
       custom_instructions: data["customInstructions"],
@@ -208,4 +224,14 @@ defmodule Viber.Runtime.Config do
 
   defp parse_max_iterations(val) when is_integer(val) and val > 0, do: val
   defp parse_max_iterations(_), do: nil
+
+  @effort_levels ~w[low medium high xhigh max]
+
+  defp parse_effort(val) when val in @effort_levels, do: val
+  defp parse_effort(_), do: nil
+
+  @thinking_modes ~w[adaptive off]
+
+  defp parse_thinking(val) when val in @thinking_modes, do: val
+  defp parse_thinking(_), do: nil
 end

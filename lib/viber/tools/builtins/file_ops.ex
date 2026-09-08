@@ -22,14 +22,7 @@ defmodule Viber.Tools.Builtins.FileOps do
           lines
           |> Enum.slice(start_idx, end_idx - start_idx)
           |> Enum.with_index(start_idx + 1)
-          |> Enum.map_join("\n", fn {line, num} ->
-            truncated =
-              if String.length(line) > @max_line_length,
-                do: String.slice(line, 0, @max_line_length) <> "...",
-                else: line
-
-            "#{String.pad_leading(Integer.to_string(num), 6)}\t#{truncated}"
-          end)
+          |> Enum.map_join("\n", &format_line/1)
 
         {:ok, "Lines #{start_idx + 1}-#{end_idx} of #{total} from #{path}:\n#{selected}"}
 
@@ -39,6 +32,15 @@ defmodule Viber.Tools.Builtins.FileOps do
   end
 
   def read(_), do: {:error, "Missing required parameter: path"}
+
+  defp format_line({line, num}) do
+    truncated =
+      if String.length(line) > @max_line_length,
+        do: String.slice(line, 0, @max_line_length) <> "...",
+        else: line
+
+    "#{String.pad_leading(Integer.to_string(num), 6)}\t#{truncated}"
+  end
 
   @spec write(map()) :: {:ok, String.t()} | {:error, String.t()}
   def write(%{"path" => path, "content" => content}) do
@@ -59,46 +61,58 @@ defmodule Viber.Tools.Builtins.FileOps do
   def edit(%{"path" => path, "old_string" => old_string, "new_string" => new_string} = input) do
     replace_all = input["replace_all"] || false
 
-    if old_string == new_string do
-      {:error, "old_string and new_string must differ"}
-    else
-      case File.read(path) do
-        {:ok, content} ->
-          count = count_occurrences(content, old_string)
-
-          cond do
-            count == 0 ->
-              {:error, "old_string not found in #{path}"}
-
-            count > 1 and not replace_all ->
-              {:error,
-               "old_string found #{count} times in #{path}; set replace_all to true or provide a more specific match"}
-
-            true ->
-              new_content =
-                if replace_all do
-                  String.replace(content, old_string, new_string)
-                else
-                  replace_first(content, old_string, new_string)
-                end
-
-              case File.write(path, new_content) do
-                :ok ->
-                  replacements = if replace_all, do: count, else: 1
-                  {:ok, "Replaced #{replacements} occurrence(s) in #{path}"}
-
-                {:error, reason} ->
-                  {:error, "Failed to write #{path}: #{inspect(reason)}"}
-              end
-          end
-
-        {:error, reason} ->
-          {:error, "Failed to read #{path}: #{inspect(reason)}"}
-      end
+    with :ok <- validate_strings_differ(old_string, new_string),
+         {:ok, content} <- read_for_edit(path),
+         {:ok, count} <- validate_occurrence_count(content, old_string, replace_all, path) do
+      write_edit(path, content, old_string, new_string, count, replace_all)
     end
   end
 
   def edit(_), do: {:error, "Missing required parameters: path, old_string, new_string"}
+
+  defp validate_strings_differ(same, same), do: {:error, "old_string and new_string must differ"}
+  defp validate_strings_differ(_old_string, _new_string), do: :ok
+
+  defp read_for_edit(path) do
+    case File.read(path) do
+      {:ok, content} -> {:ok, content}
+      {:error, reason} -> {:error, "Failed to read #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp validate_occurrence_count(content, old_string, replace_all, path) do
+    count = count_occurrences(content, old_string)
+
+    cond do
+      count == 0 ->
+        {:error, "old_string not found in #{path}"}
+
+      count > 1 and not replace_all ->
+        {:error,
+         "old_string found #{count} times in #{path}; set replace_all to true or provide a more specific match"}
+
+      true ->
+        {:ok, count}
+    end
+  end
+
+  defp write_edit(path, content, old_string, new_string, count, replace_all) do
+    new_content =
+      if replace_all do
+        String.replace(content, old_string, new_string)
+      else
+        replace_first(content, old_string, new_string)
+      end
+
+    case File.write(path, new_content) do
+      :ok ->
+        replacements = if replace_all, do: count, else: 1
+        {:ok, "Replaced #{replacements} occurrence(s) in #{path}"}
+
+      {:error, reason} ->
+        {:error, "Failed to write #{path}: #{inspect(reason)}"}
+    end
+  end
 
   defp count_occurrences(string, pattern) do
     length(String.split(string, pattern)) - 1

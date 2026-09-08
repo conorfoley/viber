@@ -17,6 +17,7 @@ defmodule Viber.API.Providers.Anthropic do
 
     with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
+      request = apply_cache_control(request)
       Logger.debug("Anthropic send_message: posting to /v1/messages")
 
       case Req.post(req, url: "/v1/messages", json: %{request | stream: false}) do
@@ -47,6 +48,7 @@ defmodule Viber.API.Providers.Anthropic do
 
     with {:ok, api_key} <- get_api_key(request) do
       req = build_req(api_key)
+      request = apply_cache_control(request)
       Logger.debug("Anthropic stream_message: posting to /v1/messages (streaming)")
 
       case Req.post(req,
@@ -55,14 +57,7 @@ defmodule Viber.API.Providers.Anthropic do
              into: :self
            ) do
         {:ok, %{status: status, headers: headers, body: async}} when status in 200..299 ->
-          content_type = get_header(headers, "content-type")
-
-          if content_type && not String.contains?(content_type, "text/event-stream") do
-            Logger.warning(
-              "Anthropic stream_message: unexpected content-type #{content_type}, expected text/event-stream"
-            )
-          end
-
+          warn_on_unexpected_content_type(headers)
           Logger.debug("Anthropic stream_message: stream started, status=#{status}")
           {:ok, build_event_stream(async)}
 
@@ -83,6 +78,63 @@ defmodule Viber.API.Providers.Anthropic do
       end
     end
   end
+
+  defp warn_on_unexpected_content_type(headers) do
+    content_type = get_header(headers, "content-type")
+
+    if content_type && not String.contains?(content_type, "text/event-stream") do
+      Logger.warning(
+        "Anthropic stream_message: unexpected content-type #{content_type}, expected text/event-stream"
+      )
+    end
+  end
+
+  @cache_breakpoint %{type: "ephemeral"}
+
+  @doc """
+  Attaches prompt-cache breakpoints so the stable prefix (tools + system) and
+  the accumulated conversation are cached across turns. Uses 2 of the 4
+  allowed breakpoints; a byte-stable system prompt is required for hits.
+  """
+  @spec apply_cache_control(MessageRequest.t()) :: MessageRequest.t()
+  def apply_cache_control(%MessageRequest{} = request) do
+    request
+    |> cache_system()
+    |> cache_last_message()
+  end
+
+  defp cache_system(%MessageRequest{system: system} = request)
+       when is_binary(system) and system != "" do
+    %{request | system: [%{type: "text", text: system, cache_control: @cache_breakpoint}]}
+  end
+
+  defp cache_system(request), do: request
+
+  defp cache_last_message(%MessageRequest{messages: messages} = request)
+       when is_list(messages) and messages != [] do
+    {init, [last]} = Enum.split(messages, -1)
+
+    case mark_last_block(last.content) do
+      {:ok, content} -> %{request | messages: init ++ [%{last | content: content}]}
+      :skip -> request
+    end
+  end
+
+  defp cache_last_message(request), do: request
+
+  defp mark_last_block(content) when is_list(content) and content != [] do
+    {init, [block]} = Enum.split(content, -1)
+
+    case block do
+      %{type: type} when type in ["text", "tool_result"] ->
+        {:ok, init ++ [Map.put(block, :cache_control, @cache_breakpoint)]}
+
+      _ ->
+        :skip
+    end
+  end
+
+  defp mark_last_block(_), do: :skip
 
   defp get_api_key(%MessageRequest{provider_overrides: overrides}) do
     case Map.get(overrides, :api_key) do
@@ -139,63 +191,72 @@ defmodule Viber.API.Providers.Anthropic do
 
     Stream.resource(
       fn -> {async, SSEParser.new(), 0} end,
-      fn
-        :done ->
-          {:halt, :done}
-
-        {async, parser, chunk_count} ->
-          ref = async.ref
-
-          receive do
-            {^ref, _} = message ->
-              case async.stream_fun.(ref, message) do
-                {:ok, [data: chunk]} ->
-                  new_count = chunk_count + 1
-
-                  if new_count == 1,
-                    do:
-                      Logger.debug(
-                        "Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)"
-                      )
-
-                  if rem(new_count, 50) == 0,
-                    do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
-
-                  case SSEParser.push(parser, chunk) do
-                    {:ok, new_parser, events} -> {events, {async, new_parser, new_count}}
-                    {:error, _} = err -> {[err], {async, parser, new_count}}
-                  end
-
-                {:ok, [:done]} ->
-                  Logger.debug("Anthropic SSE: stream done after #{chunk_count} chunks")
-
-                  case SSEParser.finish(parser) do
-                    {:ok, events} -> {events, :done}
-                    {:error, _} = err -> {[err], :done}
-                  end
-
-                {:ok, [trailers: _]} ->
-                  {[], {async, parser, chunk_count}}
-
-                {:error, e} ->
-                  Logger.error("Anthropic SSE: stream error #{inspect(e)}")
-                  {[{:stream_error, e}], :done}
-              end
-
-            other ->
-              Logger.warning("Anthropic SSE: unexpected message: #{inspect(other)}")
-              {[], {async, parser, chunk_count}}
-          after
-            60_000 ->
-              Logger.warning(
-                "Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)"
-              )
-
-              {[], {async, parser, chunk_count}}
-          end
-      end,
+      &next_stream_event/1,
       fn _ -> :ok end
     )
+  end
+
+  defp next_stream_event(:done), do: {:halt, :done}
+
+  defp next_stream_event({async, parser, chunk_count}) do
+    ref = async.ref
+
+    receive do
+      {^ref, _} = message ->
+        handle_stream_message(async, ref, parser, chunk_count, message)
+
+      other ->
+        Logger.warning("Anthropic SSE: unexpected message: #{inspect(other)}")
+        {[], {async, parser, chunk_count}}
+    after
+      60_000 ->
+        Logger.warning(
+          "Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)"
+        )
+
+        {[], {async, parser, chunk_count}}
+    end
+  end
+
+  defp handle_stream_message(async, ref, parser, chunk_count, message) do
+    case async.stream_fun.(ref, message) do
+      {:ok, [data: chunk]} ->
+        handle_stream_chunk(async, parser, chunk_count, chunk)
+
+      {:ok, [:done]} ->
+        Logger.debug("Anthropic SSE: stream done after #{chunk_count} chunks")
+
+        case SSEParser.finish(parser) do
+          {:ok, events} -> {events, :done}
+          {:error, _} = err -> {[err], :done}
+        end
+
+      {:ok, [trailers: _]} ->
+        {[], {async, parser, chunk_count}}
+
+      {:error, e} ->
+        Logger.error("Anthropic SSE: stream error #{inspect(e)}")
+        {[{:stream_error, e}], :done}
+    end
+  end
+
+  defp handle_stream_chunk(async, parser, chunk_count, chunk) do
+    new_count = chunk_count + 1
+    log_chunk_progress(new_count, chunk)
+
+    case SSEParser.push(parser, chunk) do
+      {:ok, new_parser, events} -> {events, {async, new_parser, new_count}}
+      {:error, _} = err -> {[err], {async, parser, new_count}}
+    end
+  end
+
+  defp log_chunk_progress(1, chunk) do
+    Logger.debug("Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)")
+  end
+
+  defp log_chunk_progress(new_count, _chunk) do
+    if rem(new_count, 50) == 0,
+      do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
   end
 
   defp collect_async_body(%Req.Response.Async{} = async) do
@@ -233,13 +294,6 @@ defmodule Viber.API.Providers.Anthropic do
     case Map.get(headers, name) do
       [value | _] -> value
       _ -> nil
-    end
-  end
-
-  defp get_header(headers, name) when is_list(headers) do
-    case List.keyfind(headers, name, 0) do
-      {_, value} -> value
-      nil -> nil
     end
   end
 end

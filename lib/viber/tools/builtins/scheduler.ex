@@ -12,17 +12,7 @@ defmodule Viber.Tools.Builtins.Scheduler do
     if jobs == [] do
       {:ok, "No scheduled jobs."}
     else
-      lines =
-        Enum.map(jobs, fn job ->
-          status = if job.enabled, do: "enabled", else: "disabled"
-
-          last =
-            if job.last_run_at,
-              do: Calendar.strftime(job.last_run_at, "%Y-%m-%d %H:%M:%S UTC"),
-              else: "never"
-
-          "#{job.id} | #{job.name} | #{job.cron_expr} | #{job.type} | #{status} | last: #{last} (#{job.last_status || "n/a"})"
-        end)
+      lines = Enum.map(jobs, &format_job_line/1)
 
       header = "ID | Name | Schedule | Type | Status | Last Run"
       separator = String.duplicate("-", 80)
@@ -132,6 +122,17 @@ defmodule Viber.Tools.Builtins.Scheduler do
   @spec permission_for(map()) :: :read_only | :danger_full_access
   def permission_for(%{"action" => action}) when action in ~w(list history), do: :read_only
   def permission_for(_), do: :danger_full_access
+
+  defp format_job_line(job) do
+    status = if job.enabled, do: "enabled", else: "disabled"
+
+    last =
+      if job.last_run_at,
+        do: Calendar.strftime(job.last_run_at, "%Y-%m-%d %H:%M:%S UTC"),
+        else: "never"
+
+    "#{job.id} | #{job.name} | #{job.cron_expr} | #{job.type} | #{status} | last: #{last} (#{job.last_status || "n/a"})"
+  end
 
   defp format_changeset_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

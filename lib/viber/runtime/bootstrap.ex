@@ -3,8 +3,6 @@ defmodule Viber.Runtime.Bootstrap do
   Project stack detection from filesystem markers and startup credential checks.
   """
 
-  require Logger
-
   @provider_env_vars [
     {"ANTHROPIC_API_KEY", "Anthropic Claude"},
     {"OPENAI_API_KEY", "OpenAI"},
@@ -53,65 +51,96 @@ defmodule Viber.Runtime.Bootstrap do
 
   @spec detect_stack(String.t()) :: stack_info()
   def detect_stack(project_root) do
-    cond do
-      File.exists?(Path.join(project_root, "mix.exs")) ->
-        %{
-          language: "Elixir",
-          framework: "OTP",
-          package_manager: "Mix/Hex",
-          test_command: "mix test",
-          lint_command: "mix compile --warnings-as-errors"
-        }
+    [
+      &detect_elixir_stack/1,
+      &detect_rust_stack/1,
+      &detect_node_stack_if_present/1,
+      &detect_go_stack/1,
+      &detect_python_stack/1,
+      &detect_ruby_stack/1
+    ]
+    |> Enum.find_value(& &1.(project_root))
+    |> Kernel.||(unknown_stack())
+  end
 
-      File.exists?(Path.join(project_root, "Cargo.toml")) ->
-        %{
-          language: "Rust",
-          framework: nil,
-          package_manager: "Cargo",
-          test_command: "cargo test",
-          lint_command: "cargo clippy"
-        }
-
-      File.exists?(Path.join(project_root, "package.json")) ->
-        detect_node_stack(project_root)
-
-      File.exists?(Path.join(project_root, "go.mod")) ->
-        %{
-          language: "Go",
-          framework: nil,
-          package_manager: "Go Modules",
-          test_command: "go test ./...",
-          lint_command: "go vet ./..."
-        }
-
-      File.exists?(Path.join(project_root, "pyproject.toml")) or
-          File.exists?(Path.join(project_root, "requirements.txt")) ->
-        %{
-          language: "Python",
-          framework: nil,
-          package_manager: "pip",
-          test_command: "pytest",
-          lint_command: "ruff check"
-        }
-
-      File.exists?(Path.join(project_root, "Gemfile")) ->
-        %{
-          language: "Ruby",
-          framework: nil,
-          package_manager: "Bundler",
-          test_command: "bundle exec rspec",
-          lint_command: "bundle exec rubocop"
-        }
-
-      true ->
-        %{
-          language: nil,
-          framework: nil,
-          package_manager: nil,
-          test_command: nil,
-          lint_command: nil
-        }
+  defp detect_elixir_stack(project_root) do
+    if File.exists?(Path.join(project_root, "mix.exs")) do
+      %{
+        language: "Elixir",
+        framework: "OTP",
+        package_manager: "Mix/Hex",
+        test_command: "mix test",
+        lint_command: "mix compile --warnings-as-errors"
+      }
     end
+  end
+
+  defp detect_rust_stack(project_root) do
+    if File.exists?(Path.join(project_root, "Cargo.toml")) do
+      %{
+        language: "Rust",
+        framework: nil,
+        package_manager: "Cargo",
+        test_command: "cargo test",
+        lint_command: "cargo clippy"
+      }
+    end
+  end
+
+  defp detect_node_stack_if_present(project_root) do
+    if File.exists?(Path.join(project_root, "package.json")) do
+      detect_node_stack(project_root)
+    end
+  end
+
+  defp detect_go_stack(project_root) do
+    if File.exists?(Path.join(project_root, "go.mod")) do
+      %{
+        language: "Go",
+        framework: nil,
+        package_manager: "Go Modules",
+        test_command: "go test ./...",
+        lint_command: "go vet ./..."
+      }
+    end
+  end
+
+  defp detect_python_stack(project_root) do
+    has_python =
+      File.exists?(Path.join(project_root, "pyproject.toml")) or
+        File.exists?(Path.join(project_root, "requirements.txt"))
+
+    if has_python do
+      %{
+        language: "Python",
+        framework: nil,
+        package_manager: "pip",
+        test_command: "pytest",
+        lint_command: "ruff check"
+      }
+    end
+  end
+
+  defp detect_ruby_stack(project_root) do
+    if File.exists?(Path.join(project_root, "Gemfile")) do
+      %{
+        language: "Ruby",
+        framework: nil,
+        package_manager: "Bundler",
+        test_command: "bundle exec rspec",
+        lint_command: "bundle exec rubocop"
+      }
+    end
+  end
+
+  defp unknown_stack do
+    %{
+      language: nil,
+      framework: nil,
+      package_manager: nil,
+      test_command: nil,
+      lint_command: nil
+    }
   end
 
   defp detect_node_stack(project_root) do
@@ -123,29 +152,23 @@ defmodule Viber.Runtime.Bootstrap do
       lint_command: "npm run lint"
     }
 
-    case File.read(Path.join(project_root, "package.json")) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, pkg} ->
-            deps = Map.merge(pkg["dependencies"] || %{}, pkg["devDependencies"] || %{})
+    with {:ok, content} <- File.read(Path.join(project_root, "package.json")),
+         {:ok, pkg} <- Jason.decode(content) do
+      %{base | framework: detect_node_framework(pkg)}
+    else
+      _ -> base
+    end
+  end
 
-            framework =
-              cond do
-                Map.has_key?(deps, "next") -> "Next.js"
-                Map.has_key?(deps, "react") -> "React"
-                Map.has_key?(deps, "vue") -> "Vue"
-                Map.has_key?(deps, "express") -> "Express"
-                true -> nil
-              end
+  defp detect_node_framework(pkg) do
+    deps = Map.merge(pkg["dependencies"] || %{}, pkg["devDependencies"] || %{})
 
-            %{base | framework: framework}
-
-          _ ->
-            base
-        end
-
-      _ ->
-        base
+    cond do
+      Map.has_key?(deps, "next") -> "Next.js"
+      Map.has_key?(deps, "react") -> "React"
+      Map.has_key?(deps, "vue") -> "Vue"
+      Map.has_key?(deps, "express") -> "Express"
+      true -> nil
     end
   end
 end
