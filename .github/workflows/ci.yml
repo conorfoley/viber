@@ -51,6 +51,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mix-
 
+      - name: Cache PLT
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/test/plt*
+            plt
+          key: ${{ runner.os }}-plt-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-
+
       - name: Install dependencies
         run: mix deps.get
 

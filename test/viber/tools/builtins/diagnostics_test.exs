@@ -21,6 +21,7 @@ defmodule Viber.Tools.Builtins.DiagnosticsTest do
   end
 
   describe "dialyzer output structure" do
+    @tag :slow
     test "result contains Tool and Findings headers" do
       assert {:ok, result} = Diagnostics.execute(%{"tool" => "dialyzer"})
       assert result =~ "Tool: dialyzer"
@@ -28,6 +29,7 @@ defmodule Viber.Tools.Builtins.DiagnosticsTest do
       assert result =~ "--- Raw Output ---"
     end
 
+    @tag :slow
     test "result is either no-warnings or a list of file:line findings" do
       assert {:ok, result} = Diagnostics.execute(%{"tool" => "dialyzer"})
 
@@ -38,6 +40,7 @@ defmodule Viber.Tools.Builtins.DiagnosticsTest do
       end
     end
 
+    @tag :slow
     test "scoping by path filters findings to that path" do
       assert {:ok, all} = Diagnostics.execute(%{"tool" => "dialyzer"})
 
