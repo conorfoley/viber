@@ -154,14 +154,18 @@ defmodule Viber.Gateway.Router do
   defp maybe_register_discord_commands(config) do
     if config[:application_id] do
       Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
-        case Viber.Gateway.Discord.Adapter.register_commands(config) do
-          :ok ->
-            Logger.info("Gateway: Discord slash commands registered")
-
-          {:error, reason} ->
-            Logger.warning("Gateway: Discord command registration failed: #{inspect(reason)}")
-        end
+        register_discord_commands(config)
       end)
+    end
+  end
+
+  defp register_discord_commands(config) do
+    case Viber.Gateway.Discord.Adapter.register_commands(config) do
+      :ok ->
+        Logger.info("Gateway: Discord slash commands registered")
+
+      {:error, reason} ->
+        Logger.warning("Gateway: Discord command registration failed: #{inspect(reason)}")
     end
   end
 
@@ -192,6 +196,8 @@ defmodule Viber.Gateway.Router do
 
     opts = [
       id: session_id,
+      model: Application.get_env(:viber, :gateway_model, "sonnet"),
+      project_root: Application.get_env(:viber, :project_root),
       name: {:via, Registry, {Viber.SessionRegistry, session_id}}
     ]
 
@@ -246,30 +252,31 @@ defmodule Viber.Gateway.Router do
 
     monitor_ref = Process.monitor(task_pid)
     chunks = collect_chunks(monitor_ref, [])
+    Process.demonitor(monitor_ref, [:flush])
     IO.iodata_to_binary(chunks)
   end
 
   defp collect_chunks(monitor_ref, acc) do
     receive do
       {:gw_event, %Viber.Runtime.Event{type: :text_delta, payload: %{text: text}}} ->
-        collect_chunks(monitor_ref, [acc | [text]])
+        collect_chunks(monitor_ref, [text | acc])
 
       {:gw_event, %Viber.Runtime.Event{type: :turn_complete}} ->
-        acc
+        Enum.reverse(acc)
 
       {:gw_event, %Viber.Runtime.Event{type: :error, payload: %{message: reason}}} ->
         Logger.error("Gateway: conversation error: #{reason}")
-        acc
+        Enum.reverse(acc)
 
       {:gw_event, %Viber.Runtime.Event{}} ->
         collect_chunks(monitor_ref, acc)
 
       {:DOWN, ^monitor_ref, :process, _pid, _reason} ->
-        acc
+        Enum.reverse(acc)
     after
       300_000 ->
         Logger.warning("Gateway: conversation timed out")
-        acc
+        Enum.reverse(acc)
     end
   end
 end

@@ -55,7 +55,7 @@ defmodule Viber.MixProject do
       {:myxql, "~> 0.7"},
       {:quantum, "~> 3.5"},
       {:file_system, "~> 1.0"},
-      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end

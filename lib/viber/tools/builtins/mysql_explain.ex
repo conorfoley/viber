@@ -44,7 +44,7 @@ defmodule Viber.Tools.Builtins.MysqlExplain do
   end
 
   defp format_explain(result) do
-    if result.columns && length(result.columns) > 0 do
+    if result.columns && result.columns != [] do
       header = Enum.join(result.columns, " | ")
 
       rows =

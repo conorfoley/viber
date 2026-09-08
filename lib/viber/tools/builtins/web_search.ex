@@ -18,20 +18,7 @@ defmodule Viber.Tools.Builtins.WebSearch do
 
     case Req.get(url: url, headers: headers, receive_timeout: @timeout_ms) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
-        results = parse_results(body, max_results)
-
-        if results == [] do
-          {:ok, "No results found for: #{query}"}
-        else
-          formatted =
-            results
-            |> Enum.with_index(1)
-            |> Enum.map_join("\n\n", fn {%{title: title, url: url, snippet: snippet}, idx} ->
-              "#{idx}. #{title}\n   #{url}\n   #{snippet}"
-            end)
-
-          {:ok, "Search results for: #{query}\n\n#{formatted}"}
-        end
+        format_search_response(query, parse_results(body, max_results))
 
       {:ok, %{status: status}} ->
         {:error, "Search request failed with HTTP #{status}"}
@@ -42,6 +29,19 @@ defmodule Viber.Tools.Builtins.WebSearch do
   end
 
   def execute(_), do: {:error, "Missing required parameter: query"}
+
+  defp format_search_response(query, []), do: {:ok, "No results found for: #{query}"}
+
+  defp format_search_response(query, results) do
+    formatted =
+      results
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n\n", fn {%{title: title, url: url, snippet: snippet}, idx} ->
+        "#{idx}. #{title}\n   #{url}\n   #{snippet}"
+      end)
+
+    {:ok, "Search results for: #{query}\n\n#{formatted}"}
+  end
 
   defp parse_results(body, max_results) when is_binary(body) do
     ~r/<a rel="nofollow" class="result__a" href="(?<url>[^"]+)"[^>]*>(?<title>.*?)<\/a>.*?<a class="result__snippet"[^>]*>(?<snippet>.*?)<\/a>/s

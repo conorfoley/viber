@@ -141,7 +141,7 @@ defmodule Viber.Tools.MCP.Server do
               Jason.encode!(%{
                 "jsonrpc" => "2.0",
                 "id" => req_id,
-                "error" => %{"code" => -32601, "message" => "Method not found"}
+                "error" => %{"code" => -32_601, "message" => "Method not found"}
               }) <> "\n"
 
             Port.command(acc.port, error_reply)

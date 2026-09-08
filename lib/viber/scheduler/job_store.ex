@@ -64,7 +64,7 @@ defmodule Viber.Scheduler.JobStore do
   @impl true
   def init(_opts) do
     send(self(), :load_jobs)
-    {:ok, %{history: []}}
+    {:ok, %{history: [], quantum_names: %{}, free_names: [], next_name_idx: 0}}
   end
 
   @impl true
@@ -73,18 +73,21 @@ defmodule Viber.Scheduler.JobStore do
       try do
         jobs = Repo.all(Job)
 
-        Enum.each(jobs, fn job ->
-          if job.enabled, do: schedule_quantum_job(job)
-        end)
+        state =
+          Enum.reduce(jobs, state, fn job, st ->
+            if job.enabled, do: schedule_quantum_job(job, st), else: st
+          end)
 
         Logger.info("Loaded #{length(jobs)} scheduled job(s)")
+        {:noreply, state}
       rescue
         e ->
           Logger.warning("Could not load scheduled jobs: #{Exception.message(e)}")
+          {:noreply, state}
       end
+    else
+      {:noreply, state}
     end
-
-    {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -116,15 +119,23 @@ defmodule Viber.Scheduler.JobStore do
   end
 
   def handle_call({:create_job, attrs}, _from, state) do
-    changeset = Job.changeset(%Job{}, attrs)
+    if repo_available?() do
+      changeset = Job.changeset(%Job{}, attrs)
 
-    case Repo.insert(changeset) do
-      {:ok, job} ->
-        if job.enabled, do: schedule_quantum_job(job)
-        {:reply, {:ok, job}, state}
+      try do
+        case Repo.insert(changeset) do
+          {:ok, job} ->
+            state = if job.enabled, do: schedule_quantum_job(job, state), else: state
+            {:reply, {:ok, job}, state}
 
-      {:error, changeset} ->
-        {:reply, {:error, changeset}, state}
+          {:error, changeset} ->
+            {:reply, {:error, changeset}, state}
+        end
+      rescue
+        e -> {:reply, {:error, Exception.message(e)}, state}
+      end
+    else
+      {:reply, {:error, "Database not available"}, state}
     end
   end
 
@@ -134,17 +145,8 @@ defmodule Viber.Scheduler.JobStore do
         {:reply, {:error, "Job not found: #{id}"}, state}
 
       job ->
-        changeset = Job.changeset(job, attrs)
-
-        case Repo.update(changeset) do
-          {:ok, updated} ->
-            deschedule_quantum_job(job.id)
-            if updated.enabled, do: schedule_quantum_job(updated)
-            {:reply, {:ok, updated}, state}
-
-          {:error, changeset} ->
-            {:reply, {:error, changeset}, state}
-        end
+        {result, state} = apply_job_update(job, attrs, state)
+        {:reply, result, state}
     end
   end
 
@@ -154,8 +156,10 @@ defmodule Viber.Scheduler.JobStore do
         {:reply, {:error, "Job not found: #{id}"}, state}
 
       job ->
-        deschedule_quantum_job(job.id)
-        Repo.delete!(job)
+        state = deschedule_quantum_job(job.id, state)
+
+        safe_query(fn -> Repo.delete!(job) end, :ok)
+
         {:reply, :ok, state}
     end
   end
@@ -190,24 +194,74 @@ defmodule Viber.Scheduler.JobStore do
     {:noreply, %{state | history: history}}
   end
 
-  defp schedule_quantum_job(job) do
+  defp apply_job_update(job, attrs, state) do
+    changeset = Job.changeset(job, attrs)
+
+    case safe_query(fn -> Repo.update(changeset) end, {:error, "Database error"}) do
+      {:ok, updated} ->
+        state = deschedule_quantum_job(job.id, state)
+        state = if updated.enabled, do: schedule_quantum_job(updated, state), else: state
+        {{:ok, updated}, state}
+
+      {:error, changeset} ->
+        {{:error, changeset}, state}
+    end
+  end
+
+  defp schedule_quantum_job(job, state) do
     case Crontab.CronExpression.Parser.parse(job.cron_expr) do
       {:ok, cron} ->
+        {name, state} = acquire_quantum_name(job.id, state)
+
         quantum_job =
           Viber.Scheduler.new_job()
-          |> Quantum.Job.set_name(String.to_atom("viber_job_#{job.id}"))
+          |> Quantum.Job.set_name(name)
           |> Quantum.Job.set_schedule(cron)
           |> Quantum.Job.set_task({Runner, :run, [job.id]})
 
         Viber.Scheduler.add_job(quantum_job)
+        state
 
       {:error, reason} ->
         Logger.warning("Invalid cron expression for job #{job.name}: #{inspect(reason)}")
+        state
     end
   end
 
-  defp deschedule_quantum_job(id) do
-    Viber.Scheduler.delete_job(String.to_atom("viber_job_#{id}"))
+  defp deschedule_quantum_job(id, state) do
+    case Map.fetch(state.quantum_names, id) do
+      {:ok, name} ->
+        Viber.Scheduler.delete_job(name)
+
+        %{
+          state
+          | quantum_names: Map.delete(state.quantum_names, id),
+            free_names: [name | state.free_names]
+        }
+
+      :error ->
+        state
+    end
+  end
+
+  defp acquire_quantum_name(job_id, state) do
+    case Map.fetch(state.quantum_names, job_id) do
+      {:ok, name} ->
+        {name, state}
+
+      :error ->
+        {name, state} =
+          case state.free_names do
+            [reused | rest] ->
+              {reused, %{state | free_names: rest}}
+
+            [] ->
+              idx = state.next_name_idx
+              {String.to_atom("viber_job_#{idx}"), %{state | next_name_idx: idx + 1}}
+          end
+
+        {name, %{state | quantum_names: Map.put(state.quantum_names, job_id, name)}}
+    end
   end
 
   defp repo_available? do

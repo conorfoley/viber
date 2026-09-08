@@ -27,7 +27,7 @@ defmodule Viber.Runtime.Compact do
     messages = Session.get_messages(session)
     compactable = Enum.drop(messages, -@preserve_recent)
 
-    length(compactable) > 0 and estimate_tokens(compactable) >= threshold
+    compactable != [] and estimate_tokens(compactable) >= threshold
   end
 
   @spec estimate_tokens([map()]) :: non_neg_integer()
@@ -51,42 +51,42 @@ defmodule Viber.Runtime.Compact do
     if length(messages) <= preserve do
       {:ok, 0}
     else
-      {old_messages, recent} = Enum.split(messages, length(messages) - preserve)
+      do_compact(session, messages, preserve, model)
+    end
+  end
 
-      old_usage =
-        Enum.reduce(old_messages, %Usage{}, fn msg, acc ->
-          if msg[:usage], do: Usage.add(acc, msg.usage), else: acc
-        end)
+  defp do_compact(session, messages, preserve, model) do
+    {old_messages, recent} = Enum.split(messages, length(messages) - preserve)
 
-      case build_summary(old_messages, model) do
-        {:ok, summary_text} ->
-          summary_msg = %{
-            role: :assistant,
-            blocks: [{:text, summary_text}],
-            usage: old_usage
-          }
+    old_usage =
+      Enum.reduce(old_messages, %Usage{}, fn msg, acc ->
+        if msg[:usage], do: Usage.add(acc, msg.usage), else: acc
+      end)
 
-          new_messages = [summary_msg | recent]
-          :ok = Session.replace_messages(session, new_messages)
-          {:ok, length(old_messages)}
+    summary_text = build_summary_text(old_messages, model)
 
-        {:error, reason} ->
-          Logger.warning(
-            "LLM compaction failed, falling back to text extraction: #{inspect(reason)}"
-          )
+    summary_msg = %{
+      role: :assistant,
+      blocks: [{:text, summary_text}],
+      usage: old_usage
+    }
 
-          fallback_text = build_fallback_summary(old_messages)
+    new_messages = [summary_msg | recent]
+    :ok = Session.replace_messages(session, new_messages)
+    {:ok, length(old_messages)}
+  end
 
-          summary_msg = %{
-            role: :assistant,
-            blocks: [{:text, fallback_text}],
-            usage: old_usage
-          }
+  defp build_summary_text(old_messages, model) do
+    case build_summary(old_messages, model) do
+      {:ok, summary_text} ->
+        summary_text
 
-          new_messages = [summary_msg | recent]
-          :ok = Session.replace_messages(session, new_messages)
-          {:ok, length(old_messages)}
-      end
+      {:error, reason} ->
+        Logger.warning(
+          "LLM compaction failed, falling back to text extraction: #{inspect(reason)}"
+        )
+
+        build_fallback_summary(old_messages)
     end
   end
 

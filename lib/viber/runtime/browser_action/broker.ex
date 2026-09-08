@@ -274,20 +274,7 @@ defmodule Viber.Runtime.BrowserAction.Broker do
           "BrowserAction.Broker: tab waiter for session #{inspect(session_id)} died (#{inspect(reason)}); cleaning up"
         )
 
-        tab_waiters =
-          case Map.get(state.tab_waiters, session_id) do
-            nil ->
-              state.tab_waiters
-
-            waiters ->
-              filtered = Enum.reject(waiters, fn {_pid, r} -> r == ref end)
-
-              if filtered == [] do
-                Map.delete(state.tab_waiters, session_id)
-              else
-                Map.put(state.tab_waiters, session_id, filtered)
-              end
-          end
+        tab_waiters = remove_tab_waiter_ref(state.tab_waiters, session_id, ref)
 
         {:noreply, %{state | monitors: monitors, tab_waiters: tab_waiters}}
 
@@ -301,6 +288,25 @@ defmodule Viber.Runtime.BrowserAction.Broker do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp remove_tab_waiter_ref(tab_waiters, session_id, ref) do
+    case Map.get(tab_waiters, session_id) do
+      nil ->
+        tab_waiters
+
+      waiters ->
+        filtered = Enum.reject(waiters, fn {_pid, r} -> r == ref end)
+        put_or_delete_tab_waiters(tab_waiters, session_id, filtered)
+    end
+  end
+
+  defp put_or_delete_tab_waiters(tab_waiters, session_id, []) do
+    Map.delete(tab_waiters, session_id)
+  end
+
+  defp put_or_delete_tab_waiters(tab_waiters, session_id, filtered) do
+    Map.put(tab_waiters, session_id, filtered)
+  end
 
   defp wait_for_result(server, action_id, timeout) do
     receive do

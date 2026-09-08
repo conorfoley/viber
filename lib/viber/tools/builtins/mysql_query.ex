@@ -70,7 +70,7 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
   end
 
   defp check_read_only(conn_name, query) do
-    if ConnectionManager.is_read_only?(conn_name) && classify_query(query) != :read_only do
+    if ConnectionManager.read_only?(conn_name) && classify_query(query) != :read_only do
       {:error,
        "Connection '#{conn_name}' is read-only; only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed"}
     else
@@ -81,13 +81,11 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
   defp apply_safety(query, input) do
     normalized = query |> String.trim() |> String.upcase()
 
-    cond do
-      starts_with_any?(normalized, @read_only_prefixes) && !has_limit?(normalized) ->
-        limit = input["limit"] || @default_limit
-        {:ok, String.trim_trailing(query, ";") <> " LIMIT #{limit}"}
-
-      true ->
-        {:ok, query}
+    if starts_with_any?(normalized, @read_only_prefixes) && !has_limit?(normalized) do
+      limit = input["limit"] || @default_limit
+      {:ok, String.trim_trailing(query, ";") <> " LIMIT #{limit}"}
+    else
+      {:ok, query}
     end
   end
 
@@ -98,31 +96,50 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
     normalized = query |> String.trim() |> String.upcase()
 
     cond do
-      (String.starts_with?(normalized, "DROP") || String.starts_with?(normalized, "TRUNCATE")) &&
-          input["confirm"] != true ->
-        {:error,
-         "⚠ DESTRUCTIVE: #{hd(String.split(normalized))} operation detected.\n" <>
-           "This will permanently destroy data. Pass \"confirm\": true to proceed.\n" <>
-           "Query: #{String.slice(query, 0, 200)}"}
+      has_multiple_statements?(normalized) ->
+        {:error, "Multi-statement queries are not allowed. Execute each statement separately."}
+
+      destructive_ddl?(normalized) && input["confirm"] != true ->
+        destructive_ddl_error(query, normalized)
 
       starts_with_any?(normalized, @write_prefixes) && !has_where?(normalized) &&
           input["force"] != true ->
-        table = extract_table_name(normalized)
-
-        {:error,
-         "Refusing #{hd(String.split(normalized))} without WHERE clause. " <>
-           "Add a WHERE clause or pass \"force\": true to override." <>
-           if(table,
-             do: "\nConsider running: SELECT COUNT(*) FROM #{table} first to check scope.",
-             else: ""
-           )}
-
-      starts_with_any?(normalized, @write_prefixes) ->
-        {:ok, query}
+        missing_where_error(normalized)
 
       true ->
         {:ok, query}
     end
+  end
+
+  defp has_multiple_statements?(normalized) do
+    normalized
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> length() > 1
+  end
+
+  defp destructive_ddl?(normalized) do
+    contains_keyword?(normalized, ["DROP", "TRUNCATE"])
+  end
+
+  defp destructive_ddl_error(query, normalized) do
+    {:error,
+     "⚠ DESTRUCTIVE: #{hd(String.split(normalized))} operation detected.\n" <>
+       "This will permanently destroy data. Pass \"confirm\": true to proceed.\n" <>
+       "Query: #{String.slice(query, 0, 200)}"}
+  end
+
+  defp missing_where_error(normalized) do
+    table = extract_table_name(normalized)
+
+    {:error,
+     "Refusing #{hd(String.split(normalized))} without WHERE clause. " <>
+       "Add a WHERE clause or pass \"force\": true to override." <>
+       if(table,
+         do: "\nConsider running: SELECT COUNT(*) FROM #{table} first to check scope.",
+         else: ""
+       )}
   end
 
   defp extract_table_name(normalized) do

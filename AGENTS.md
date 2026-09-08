@@ -10,16 +10,21 @@ Viber navigates and interprets live web pages via its browser integration, enabl
 
 ## Project Structure & Module Organization
 
-The codebase is organized into six top-level domains under `lib/viber/`:
+The codebase is organized into eight top-level domains under `lib/viber/`:
 
 - **API** (`api/`) — LLM provider abstraction via `Viber.API.Provider` behaviour, with Anthropic and OpenAI-compatible implementations. Includes streaming SSE parser, typed request/response structs, and a client with model alias resolution.
-- **CLI** (`cli/`) — Entry point (`Main`), interactive REPL, terminal renderer, and project init scaffolding.
-- **Commands** (`commands/`) — Slash-command system with a parser, registry, and individual handler modules (e.g., `/help`, `/model`, `/compact`, `/config`).
-- **Runtime** (`runtime/`) — Session management, conversation state, config loading, permissions, prompt building, usage tracking, and conversation compaction.
+- **CLI** (`cli/`) — Entry point (`Main`), interactive REPL, terminal renderer, REPL history, and project init scaffolding.
+- **Commands** (`commands/`) — Slash-command system with a parser, registry, and individual handler modules (e.g., `/help`, `/model`, `/effort`, `/thinking`, `/compact`, `/config`, `/connect`, `/databases`, `/resume`).
+- **Database** (`database/`) — `ConnectionManager` for named MySQL/PostgreSQL connections, `AuditLogger` and `QueryLog` for structured query logging.
+- **Gateway** (`gateway/`) — Routes inbound messages from external chat channels (Discord first) to persistent Viber sessions via the `Viber.Gateway.Adapter` behaviour and a central `Router`.
+- **Runtime** (`runtime/`) — Session management, conversation state, config loading, permissions, prompt building, usage tracking, conversation compaction, sub-agents, and skills.
+- **Scheduler** (`scheduler/`) — Quantum-based cron jobs: `Runner` executes jobs (SQL/scripts/health checks), `JobStore` persists them, `AlertSink` dispatches notifications (Slack webhook, file, log).
 - **Server** (`server/`) — Optional HTTP/SSE server (Bandit + Plug) on port 4100 for programmatic access, with session handler and SSE streaming.
-- **Tools** (`tools/`) — Tool spec definition, registry, executor, built-in tools (bash, file_ops, glob, grep, ls, web_fetch), and MCP (Model Context Protocol) client/server integration.
+- **Tools** (`tools/`) — Tool spec definition (with optional input-dependent `permission_fn`), registry, executor, built-in tools (bash, file_ops, glob, grep, ls, web_fetch, git, scheduler, mysql_*, data_export, …), and MCP (Model Context Protocol) client/server integration.
 
-A Mix task (`mix viber`) starts the REPL via `Mix.Tasks.Viber`. The OTP application tree starts registries, a dynamic supervisor for sessions, a task supervisor, and the MCP server manager.
+Additional top-level modules: `HotReloader` (file-system watcher for live code reloading) and `Repo` (Ecto repo).
+
+A Mix task (`mix viber`) starts the REPL via `Mix.Tasks.Viber`. The OTP application tree starts registries, a dynamic supervisor for sessions, a task supervisor, the MCP server manager, and (by config) the repo, scheduler, gateway, and HTTP server.
 
 ## Build, Test, and Development Commands
 
@@ -87,4 +92,4 @@ Use `mix checklist` when finishing any set of changes to catch issues before com
 
 ## Dependencies
 
-Key runtime dependencies: `req` (HTTP), `jason` (JSON), `plug` + `bandit` (HTTP server), `owl` (terminal UI).
+Key runtime dependencies: `req` (HTTP), `jason` (JSON), `plug` + `bandit` (HTTP server), `owl` (terminal UI), `ecto_sql` + `postgrex` + `myxql` (database), `quantum` (cron scheduling), `file_system` (hot reload). Dev-only: `dialyxir` (Dialyzer), `credo` (static analysis).

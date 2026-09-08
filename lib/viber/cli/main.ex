@@ -3,8 +3,6 @@ defmodule Viber.CLI.Main do
   CLI entry point for Viber — handles arg parsing and boot sequence.
   """
 
-  require Logger
-
   alias Viber.CLI.{Init, Repl}
   alias Viber.Runtime.{Bootstrap, Config, Permissions, Session}
   alias Viber.API.Client
@@ -57,55 +55,17 @@ defmodule Viber.CLI.Main do
   defp run_repl(opts) do
     log_path = setup_file_logging()
 
-    config_opts =
-      if opts[:config] do
-        [project_root: Path.dirname(opts[:config])]
-      else
-        []
-      end
+    {:ok, config} = Config.load(config_opts(opts))
 
-    {:ok, config} = Config.load(config_opts)
-
-    model =
-      opts[:model] || config.model || "sonnet"
-
+    model = opts[:model] || config.model || "sonnet"
     resolved_model = Client.resolve_model_alias(model)
-
-    permission_mode =
-      if opts[:permission_mode] do
-        Permissions.mode_from_string(opts[:permission_mode])
-      else
-        config.permission_mode || :prompt
-      end
+    permission_mode = resolve_permission_mode(opts, config)
 
     ServerManager.start_servers(config)
-
-    case Bootstrap.check_provider_credentials(resolved_model) do
-      {:warn, message} -> IO.puts("\n⚠  #{message}\n")
-      :ok -> :ok
-    end
+    print_credential_warning(resolved_model)
 
     project_root = File.cwd!()
-
-    {:ok, session} =
-      if opts[:resume] do
-        case Session.resume(opts[:resume]) do
-          {:ok, pid} ->
-            msg_count = length(Session.get_messages(pid))
-            IO.puts("Resumed session #{opts[:resume]} (#{msg_count} messages)")
-            {:ok, pid}
-
-          {:error, :not_found} ->
-            IO.puts("Session not found: #{opts[:resume]}. Starting new session.")
-            Session.start_link(model: model, project_root: project_root)
-
-          {:error, reason} ->
-            IO.puts("Failed to resume: #{inspect(reason)}. Starting new session.")
-            Session.start_link(model: model, project_root: project_root)
-        end
-      else
-        Session.start_link(model: model, project_root: project_root)
-      end
+    {:ok, session} = resolve_session(opts, model, project_root)
 
     IO.puts(welcome_banner(resolved_model, permission_mode, log_path))
 
@@ -116,6 +76,54 @@ defmodule Viber.CLI.Main do
       permission_mode: permission_mode,
       project_root: project_root
     )
+  end
+
+  defp config_opts(opts) do
+    if opts[:config] do
+      [project_root: Path.dirname(opts[:config])]
+    else
+      []
+    end
+  end
+
+  defp resolve_permission_mode(opts, config) do
+    if opts[:permission_mode] do
+      Permissions.mode_from_string(opts[:permission_mode])
+    else
+      config.permission_mode || :prompt
+    end
+  end
+
+  defp print_credential_warning(resolved_model) do
+    case Bootstrap.check_provider_credentials(resolved_model) do
+      {:warn, message} -> IO.puts("\n⚠  #{message}\n")
+      :ok -> :ok
+    end
+  end
+
+  defp resolve_session(opts, model, project_root) do
+    if opts[:resume] do
+      resume_session(opts[:resume], model, project_root)
+    else
+      Session.start_link(model: model, project_root: project_root)
+    end
+  end
+
+  defp resume_session(resume_id, model, project_root) do
+    case Session.resume(resume_id) do
+      {:ok, pid} ->
+        msg_count = length(Session.get_messages(pid))
+        IO.puts("Resumed session #{resume_id} (#{msg_count} messages)")
+        {:ok, pid}
+
+      {:error, :not_found} ->
+        IO.puts("Session not found: #{resume_id}. Starting new session.")
+        Session.start_link(model: model, project_root: project_root)
+
+      {:error, reason} ->
+        IO.puts("Failed to resume: #{inspect(reason)}. Starting new session.")
+        Session.start_link(model: model, project_root: project_root)
+    end
   end
 
   defp setup_file_logging do

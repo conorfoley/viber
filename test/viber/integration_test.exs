@@ -96,7 +96,7 @@ defmodule Viber.IntegrationTest do
     {:ok, spec} = Registry.get("clear")
     {:ok, output} = spec.handler.execute([], %{session: session})
     assert output == "Session cleared."
-    assert length(Session.get_messages(session)) == 0
+    assert Session.get_messages(session) == []
   end
 
   test "compact reduces message count" do

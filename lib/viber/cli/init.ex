@@ -13,52 +13,60 @@ defmodule Viber.CLI.Init do
     with :ok <- File.mkdir_p(viber_dir),
          :ok <- write_settings(viber_dir, stack),
          :ok <- write_viber_md(project_root, stack) do
-      IO.puts([
-        IO.ANSI.green(),
-        IO.ANSI.bright(),
-        "✔ ",
-        IO.ANSI.reset(),
-        "Initialized Viber project"
-      ])
-
-      IO.puts([
-        IO.ANSI.faint(),
-        "  Created ",
-        IO.ANSI.reset(),
-        IO.ANSI.cyan(),
-        "#{viber_dir}/settings.json",
-        IO.ANSI.reset()
-      ])
-
-      IO.puts([
-        IO.ANSI.faint(),
-        "  Created ",
-        IO.ANSI.reset(),
-        IO.ANSI.cyan(),
-        "#{Path.join(project_root, "VIBER.md")}",
-        IO.ANSI.reset()
-      ])
-
-      if stack.language do
-        lang = stack.language
-
-        fw =
-          if stack.framework,
-            do: [IO.ANSI.faint(), " (", IO.ANSI.reset(), stack.framework, IO.ANSI.faint(), ")"],
-            else: []
-
-        IO.puts([
-          IO.ANSI.faint(),
-          "  Detected ",
-          IO.ANSI.reset(),
-          IO.ANSI.bright(),
-          lang,
-          IO.ANSI.reset() | fw
-        ])
-      end
+      print_init_success(viber_dir, project_root)
+      print_detected_stack(stack)
 
       :ok
     end
+  end
+
+  defp print_init_success(viber_dir, project_root) do
+    IO.puts([
+      IO.ANSI.green(),
+      IO.ANSI.bright(),
+      "✔ ",
+      IO.ANSI.reset(),
+      "Initialized Viber project"
+    ])
+
+    IO.puts([
+      IO.ANSI.faint(),
+      "  Created ",
+      IO.ANSI.reset(),
+      IO.ANSI.cyan(),
+      "#{viber_dir}/settings.json",
+      IO.ANSI.reset()
+    ])
+
+    IO.puts([
+      IO.ANSI.faint(),
+      "  Created ",
+      IO.ANSI.reset(),
+      IO.ANSI.cyan(),
+      "#{Path.join(project_root, "VIBER.md")}",
+      IO.ANSI.reset()
+    ])
+  end
+
+  defp print_detected_stack(%{language: nil}), do: :ok
+
+  defp print_detected_stack(%{language: lang, framework: framework}) do
+    fw = framework_suffix(framework)
+
+    IO.puts([
+      IO.ANSI.faint(),
+      "  Detected ",
+      IO.ANSI.reset(),
+      IO.ANSI.bright(),
+      lang,
+      IO.ANSI.reset() | fw
+    ])
+  end
+
+  defp framework_suffix(nil), do: []
+
+  defp framework_suffix(framework) do
+    [IO.ANSI.faint(), " (", IO.ANSI.reset(), framework, IO.ANSI.faint(), ")"]
   end
 
   defp write_settings(viber_dir, _stack) do

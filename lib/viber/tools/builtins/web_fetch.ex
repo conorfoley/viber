@@ -30,29 +30,34 @@ defmodule Viber.Tools.Builtins.WebFetch do
     uri = URI.parse(url)
 
     if uri.scheme in ["http", "https"] do
-      case Req.get(url: url, receive_timeout: 10_000) do
-        {:ok, %{status: status, body: body}} when status in 200..299 ->
-          body_str = if is_binary(body), do: body, else: Jason.encode!(body)
-
-          content =
-            body_str
-            |> maybe_strip_html(content_type(body_str))
-            |> truncate()
-
-          {:ok, content}
-
-        {:ok, %{status: status}} ->
-          {:error, "HTTP #{status} fetching #{url}"}
-
-        {:error, exception} ->
-          {:error, "Failed to fetch #{url}: #{Exception.message(exception)}"}
-      end
+      do_fetch(url)
     else
       {:error, "Only http:// and https:// URLs are supported"}
     end
   end
 
   def execute(_), do: {:error, "Missing required parameter: url"}
+
+  defp do_fetch(url) do
+    case Req.get(url: url, receive_timeout: 10_000) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        {:ok, format_body(body)}
+
+      {:ok, %{status: status}} ->
+        {:error, "HTTP #{status} fetching #{url}"}
+
+      {:error, exception} ->
+        {:error, "Failed to fetch #{url}: #{Exception.message(exception)}"}
+    end
+  end
+
+  defp format_body(body) do
+    body_str = if is_binary(body), do: body, else: Jason.encode!(body)
+
+    body_str
+    |> maybe_strip_html(content_type(body_str))
+    |> truncate()
+  end
 
   defp content_type(body) when is_binary(body) do
     if String.contains?(body, "<html") or String.contains?(body, "<HTML") or

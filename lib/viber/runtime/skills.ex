@@ -106,21 +106,18 @@ defmodule Viber.Runtime.Skills do
     |> String.split("\n")
     |> Enum.reduce(%{}, fn line, acc ->
       case String.split(line, ":", parts: 2) do
-        [key, value] ->
-          key = String.trim(key)
-          value = String.trim(value)
-
-          if key in ["name", "description"] and value != "" do
-            Map.put(acc, key, value)
-          else
-            acc
-          end
-
-        _ ->
-          acc
+        [key, value] -> put_frontmatter_field(acc, String.trim(key), String.trim(value))
+        _ -> acc
       end
     end)
   end
+
+  defp put_frontmatter_field(acc, key, value)
+       when key in ["name", "description"] and value != "" do
+    Map.put(acc, key, value)
+  end
+
+  defp put_frontmatter_field(acc, _key, _value), do: acc
 
   defp first_line(body) do
     body

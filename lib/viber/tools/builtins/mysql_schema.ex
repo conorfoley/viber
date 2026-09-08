@@ -26,21 +26,10 @@ defmodule Viber.Tools.Builtins.MysqlSchema do
   defp run_action("list_databases", _input, repo) do
     case query(repo, "SHOW DATABASES") do
       {:ok, result} ->
-        dbs = Enum.map(result.rows, fn [db] -> db end)
-        {:ok, "Databases:\n" <> Enum.map_join(dbs, "\n", &"  #{&1}")}
+        {:ok, format_db_list(result)}
 
       {:error, _} ->
-        case query(
-               repo,
-               "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
-             ) do
-          {:ok, result} ->
-            dbs = Enum.map(result.rows, fn [db] -> db end)
-            {:ok, "Databases:\n" <> Enum.map_join(dbs, "\n", &"  #{&1}")}
-
-          {:error, reason} ->
-            {:error, "Failed to list databases: #{inspect(reason)}"}
-        end
+        list_databases_postgres(repo)
     end
   end
 
@@ -49,25 +38,11 @@ defmodule Viber.Tools.Builtins.MysqlSchema do
 
     case query(repo, "SHOW TABLES") do
       {:ok, result} ->
-        tables = Enum.map(result.rows, fn [t | _] -> t end)
-        tables = if filter, do: Enum.filter(tables, &String.contains?(&1, filter)), else: tables
-        {:ok, "Tables (#{length(tables)}):\n" <> Enum.map_join(tables, "\n", &"  #{&1}")}
+        tables = result.rows |> Enum.map(fn [t | _] -> t end) |> filter_tables(filter)
+        {:ok, format_table_list(tables)}
 
       {:error, _} ->
-        sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
-
-        case query(repo, sql) do
-          {:ok, result} ->
-            tables = Enum.map(result.rows, fn [t] -> t end)
-
-            tables =
-              if filter, do: Enum.filter(tables, &String.contains?(&1, filter)), else: tables
-
-            {:ok, "Tables (#{length(tables)}):\n" <> Enum.map_join(tables, "\n", &"  #{&1}")}
-
-          {:error, reason} ->
-            {:error, "Failed to list tables: #{inspect(reason)}"}
-        end
+        list_tables_postgres(repo, filter)
     end
   end
 
@@ -146,65 +121,18 @@ defmodule Viber.Tools.Builtins.MysqlSchema do
       end
 
     case query_params(repo, sql, params) do
-      {:ok, result} ->
-        if result.rows == [] do
-          {:ok, "No foreign key relationships found."}
-        else
-          lines =
-            Enum.map(result.rows, fn [tbl, col, ref_tbl, ref_col] ->
-              "  #{tbl}.#{col} → #{ref_tbl}.#{ref_col}"
-            end)
-
-          {:ok, "Foreign Key Relationships:\n" <> Enum.join(lines, "\n")}
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to query relationships: #{inspect(reason)}"}
+      {:ok, result} -> {:ok, format_relationships(result.rows)}
+      {:error, reason} -> {:error, "Failed to query relationships: #{inspect(reason)}"}
     end
   end
 
   defp run_action("search_columns", %{"pattern" => pattern}, repo) do
     like = "%" <> pattern <> "%"
 
-    result =
-      case query_params(repo, "SHOW DATABASES", []) do
-        {:ok, _} ->
-          sql = """
-          SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
-          FROM INFORMATION_SCHEMA.COLUMNS
-          WHERE COLUMN_NAME LIKE ? OR DATA_TYPE LIKE ?
-          ORDER BY TABLE_NAME, ORDINAL_POSITION
-          """
-
-          query_params(repo, sql, [like, like])
-
-        {:error, _} ->
-          sql = """
-          SELECT table_name, column_name, data_type, is_nullable, column_default
-          FROM information_schema.columns
-          WHERE column_name ILIKE $1 OR data_type ILIKE $2
-          ORDER BY table_name, ordinal_position
-          """
-
-          query_params(repo, sql, [like, like])
-      end
-
-    case result do
-      {:ok, %{rows: []}} ->
-        {:ok, "No columns matching '#{pattern}'."}
-
-      {:ok, %{rows: rows}} ->
-        lines =
-          Enum.map(rows, fn [tbl, col, dtype, nullable, default] ->
-            null_str = if nullable == "YES", do: " NULL", else: " NOT NULL"
-            default_str = if default, do: " DEFAULT #{default}", else: ""
-            "  #{tbl}.#{col}  #{dtype}#{null_str}#{default_str}"
-          end)
-
-        {:ok, "Matching columns (#{length(lines)}):\n" <> Enum.join(lines, "\n")}
-
-      {:error, reason} ->
-        {:error, "Failed to search columns: #{inspect(reason)}"}
+    case search_columns_query(repo, like) do
+      {:ok, %{rows: []}} -> {:ok, "No columns matching '#{pattern}'."}
+      {:ok, %{rows: rows}} -> {:ok, format_column_matches(rows)}
+      {:error, reason} -> {:error, "Failed to search columns: #{inspect(reason)}"}
     end
   end
 
@@ -219,76 +147,78 @@ defmodule Viber.Tools.Builtins.MysqlSchema do
 
   defp describe_columns(repo, table) do
     case query(repo, "DESCRIBE `#{sanitize_identifier(table)}`") do
-      {:ok, result} ->
-        lines =
-          Enum.map(result.rows, fn row ->
-            [field, type, null, key, default, extra] =
-              Enum.take(row, 6) ++ List.duplicate(nil, max(0, 6 - length(row)))
-
-            key_str = if key && key != "", do: " [#{key}]", else: ""
-            null_str = if null == "YES", do: " NULL", else: " NOT NULL"
-            default_str = if default, do: " DEFAULT #{default}", else: ""
-            extra_str = if extra && extra != "", do: " #{extra}", else: ""
-            "  #{field}  #{type}#{null_str}#{default_str}#{key_str}#{extra_str}"
-          end)
-
-        {:ok, Enum.join(lines, "\n")}
-
-      {:error, _} ->
-        sql = """
-        SELECT column_name, data_type, is_nullable, column_default
-        FROM information_schema.columns
-        WHERE table_name = $1 AND table_schema = 'public'
-        ORDER BY ordinal_position
-        """
-
-        case query_params(repo, sql, [table]) do
-          {:ok, result} ->
-            lines =
-              Enum.map(result.rows, fn [col, dtype, nullable, default] ->
-                null_str = if nullable == "YES", do: " NULL", else: " NOT NULL"
-                default_str = if default, do: " DEFAULT #{default}", else: ""
-                "  #{col}  #{dtype}#{null_str}#{default_str}"
-              end)
-
-            {:ok, Enum.join(lines, "\n")}
-
-          {:error, reason} ->
-            {:error, "Failed to describe table: #{inspect(reason)}"}
-        end
+      {:ok, result} -> {:ok, format_mysql_columns(result.rows)}
+      {:error, _} -> describe_columns_postgres(repo, table)
     end
+  end
+
+  defp describe_columns_postgres(repo, table) do
+    sql = """
+    SELECT column_name, data_type, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_name = $1 AND table_schema = 'public'
+    ORDER BY ordinal_position
+    """
+
+    case query_params(repo, sql, [table]) do
+      {:ok, result} -> {:ok, format_postgres_columns(result.rows)}
+      {:error, reason} -> {:error, "Failed to describe table: #{inspect(reason)}"}
+    end
+  end
+
+  defp format_mysql_columns(rows) do
+    Enum.map_join(rows, "\n", fn row ->
+      [field, type, null, key, default, extra] =
+        Enum.take(row, 6) ++ List.duplicate(nil, max(0, 6 - length(row)))
+
+      key_str = if key && key != "", do: " [#{key}]", else: ""
+      null_str = if null == "YES", do: " NULL", else: " NOT NULL"
+      default_str = if default, do: " DEFAULT #{default}", else: ""
+      extra_str = if extra && extra != "", do: " #{extra}", else: ""
+      "  #{field}  #{type}#{null_str}#{default_str}#{key_str}#{extra_str}"
+    end)
+  end
+
+  defp format_postgres_columns(rows) do
+    Enum.map_join(rows, "\n", fn [col, dtype, nullable, default] ->
+      null_str = if nullable == "YES", do: " NULL", else: " NOT NULL"
+      default_str = if default, do: " DEFAULT #{default}", else: ""
+      "  #{col}  #{dtype}#{null_str}#{default_str}"
+    end)
   end
 
   defp describe_indexes(repo, table) do
     case query(repo, "SHOW INDEX FROM `#{sanitize_identifier(table)}`") do
-      {:ok, result} ->
-        grouped =
-          result.rows
-          |> Enum.group_by(fn row -> Enum.at(row, 2) end)
-          |> Enum.map(fn {name, rows} ->
-            unique = if Enum.at(hd(rows), 1) == 0, do: "UNIQUE ", else: ""
-            cols = Enum.map_join(rows, ", ", fn row -> Enum.at(row, 4) end)
-            "  #{unique}#{name} (#{cols})"
-          end)
-
-        {:ok, Enum.join(grouped, "\n")}
-
-      {:error, _} ->
-        sql = """
-        SELECT indexname, indexdef
-        FROM pg_indexes
-        WHERE tablename = $1
-        """
-
-        case query_params(repo, sql, [table]) do
-          {:ok, result} ->
-            lines = Enum.map(result.rows, fn [name, defn] -> "  #{name}: #{defn}" end)
-            {:ok, Enum.join(lines, "\n")}
-
-          {:error, reason} ->
-            {:error, "Failed to get indexes: #{inspect(reason)}"}
-        end
+      {:ok, result} -> {:ok, format_mysql_indexes(result.rows)}
+      {:error, _} -> describe_indexes_postgres(repo, table)
     end
+  end
+
+  defp describe_indexes_postgres(repo, table) do
+    sql = """
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE tablename = $1
+    """
+
+    case query_params(repo, sql, [table]) do
+      {:ok, result} -> {:ok, format_postgres_indexes(result.rows)}
+      {:error, reason} -> {:error, "Failed to get indexes: #{inspect(reason)}"}
+    end
+  end
+
+  defp format_mysql_indexes(rows) do
+    rows
+    |> Enum.group_by(fn row -> Enum.at(row, 2) end)
+    |> Enum.map_join("\n", fn {name, rows} ->
+      unique = if Enum.at(hd(rows), 1) == 0, do: "UNIQUE ", else: ""
+      cols = Enum.map_join(rows, ", ", fn row -> Enum.at(row, 4) end)
+      "  #{unique}#{name} (#{cols})"
+    end)
+  end
+
+  defp format_postgres_indexes(rows) do
+    Enum.map_join(rows, "\n", fn [name, defn] -> "  #{name}: #{defn}" end)
   end
 
   defp estimate_row_count(repo, table) do
@@ -306,6 +236,90 @@ defmodule Viber.Tools.Builtins.MysqlSchema do
           _ -> {:ok, "unknown"}
         end
     end
+  end
+
+  defp list_databases_postgres(repo) do
+    case query(
+           repo,
+           "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+         ) do
+      {:ok, result} -> {:ok, format_db_list(result)}
+      {:error, reason} -> {:error, "Failed to list databases: #{inspect(reason)}"}
+    end
+  end
+
+  defp format_db_list(result) do
+    dbs = Enum.map(result.rows, fn [db] -> db end)
+    "Databases:\n" <> Enum.map_join(dbs, "\n", &"  #{&1}")
+  end
+
+  defp list_tables_postgres(repo, filter) do
+    sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+
+    case query(repo, sql) do
+      {:ok, result} ->
+        tables = result.rows |> Enum.map(fn [t] -> t end) |> filter_tables(filter)
+        {:ok, format_table_list(tables)}
+
+      {:error, reason} ->
+        {:error, "Failed to list tables: #{inspect(reason)}"}
+    end
+  end
+
+  defp filter_tables(tables, nil), do: tables
+
+  defp filter_tables(tables, filter) do
+    Enum.filter(tables, &String.contains?(&1, filter))
+  end
+
+  defp format_table_list(tables) do
+    "Tables (#{length(tables)}):\n" <> Enum.map_join(tables, "\n", &"  #{&1}")
+  end
+
+  defp format_relationships([]), do: "No foreign key relationships found."
+
+  defp format_relationships(rows) do
+    lines =
+      Enum.map(rows, fn [tbl, col, ref_tbl, ref_col] ->
+        "  #{tbl}.#{col} → #{ref_tbl}.#{ref_col}"
+      end)
+
+    "Foreign Key Relationships:\n" <> Enum.join(lines, "\n")
+  end
+
+  defp search_columns_query(repo, like) do
+    case query_params(repo, "SHOW DATABASES", []) do
+      {:ok, _} ->
+        sql = """
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE COLUMN_NAME LIKE ? OR DATA_TYPE LIKE ?
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """
+
+        query_params(repo, sql, [like, like])
+
+      {:error, _} ->
+        sql = """
+        SELECT table_name, column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE column_name ILIKE $1 OR data_type ILIKE $2
+        ORDER BY table_name, ordinal_position
+        """
+
+        query_params(repo, sql, [like, like])
+    end
+  end
+
+  defp format_column_matches(rows) do
+    lines =
+      Enum.map(rows, fn [tbl, col, dtype, nullable, default] ->
+        null_str = if nullable == "YES", do: " NULL", else: " NOT NULL"
+        default_str = if default, do: " DEFAULT #{default}", else: ""
+        "  #{tbl}.#{col}  #{dtype}#{null_str}#{default_str}"
+      end)
+
+    "Matching columns (#{length(lines)}):\n" <> Enum.join(lines, "\n")
   end
 
   defp query(repo, sql) do

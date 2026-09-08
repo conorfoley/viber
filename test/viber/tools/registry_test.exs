@@ -18,7 +18,7 @@ defmodule Viber.Tools.RegistryTest do
   describe "list_names/0" do
     test "returns all tool names sorted" do
       names = Registry.list_names()
-      assert length(names) > 0
+      assert names != []
       assert names == Enum.sort(names)
     end
   end
@@ -42,7 +42,7 @@ defmodule Viber.Tools.RegistryTest do
   describe "builtin_specs/0" do
     test "returns non-empty list" do
       specs = Registry.builtin_specs()
-      assert length(specs) > 0
+      assert specs != []
     end
 
     test "each spec has valid input_schema" do

@@ -81,8 +81,8 @@ defmodule Viber.Database.ConnectionManager do
     GenServer.call(__MODULE__, {:get_connection, name})
   end
 
-  @spec is_read_only?(String.t()) :: boolean()
-  def is_read_only?(name) do
+  @spec read_only?(String.t()) :: boolean()
+  def read_only?(name) do
     case get_connection(name) do
       {:ok, config} -> config.read_only
       _ -> true
@@ -266,19 +266,23 @@ defmodule Viber.Database.ConnectionManager do
   end
 
   defp normalize_config(config) when is_map(config) do
-    type = config[:type] || config["type"] || infer_type(config)
+    type = config_field(config, :type) || infer_type(config)
 
     %{
-      name: config[:name] || config["name"],
+      name: config_field(config, :name),
       type: type,
-      hostname: config[:hostname] || config["hostname"] || "localhost",
-      port: config[:port] || config["port"] || default_port(type),
-      username: config[:username] || config["username"] || "",
-      password: config[:password] || config["password"] || "",
-      database: config[:database] || config["database"] || "",
-      read_only: config[:read_only] || config["read_only"] || false,
-      pool_size: config[:pool_size] || config["pool_size"] || 5
+      hostname: config_field(config, :hostname, "localhost"),
+      port: config_field(config, :port) || default_port(type),
+      username: config_field(config, :username, ""),
+      password: config_field(config, :password, ""),
+      database: config_field(config, :database, ""),
+      read_only: config_field(config, :read_only, false),
+      pool_size: config_field(config, :pool_size, 5)
     }
+  end
+
+  defp config_field(config, key, default \\ nil) do
+    config[key] || config[Atom.to_string(key)] || default
   end
 
   defp infer_type(config) do

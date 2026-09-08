@@ -10,9 +10,10 @@ defmodule Viber.Tools.Builtins.Grep do
     args = build_args(pattern, input)
     search_path = input["path"] || "."
     offset = input["offset"] || 0
+    head_limit = input["head_limit"] || @default_head_limit
 
     case System.cmd("rg", args ++ [search_path], stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output |> String.trim() |> apply_offset(offset)}
+      {output, 0} -> {:ok, output |> String.trim() |> paginate(offset, head_limit)}
       {output, 1} -> {:ok, "No matches found.\n#{String.trim(output)}"}
       {output, _} -> {:error, "rg error: #{String.trim(output)}"}
     end
@@ -22,39 +23,42 @@ defmodule Viber.Tools.Builtins.Grep do
 
   defp build_args(pattern, input) do
     mode = input["output_mode"] || "files_with_matches"
-    head_limit = input["head_limit"] || @default_head_limit
-    offset = input["offset"] || 0
 
-    base =
-      case mode do
-        "files_with_matches" -> ["-l"]
-        "count" -> ["-c"]
-        _ -> []
-      end
-
-    base = base ++ mode_flags(input) ++ [pattern]
-    base = if input["glob"], do: base ++ ["--glob", input["glob"]], else: base
-    base = if input["type"], do: base ++ ["--type", input["type"]], else: base
-    base = if input["-i"], do: base ++ ["-i"], else: base
-    base = if input["-n"], do: base ++ ["-n"], else: base
-    base = if input["multiline"], do: base ++ ["-U", "--multiline-dotall"], else: base
-    base = if input["-B"], do: base ++ ["-B", Integer.to_string(input["-B"])], else: base
-    base = if input["-A"], do: base ++ ["-A", Integer.to_string(input["-A"])], else: base
-    base = if input["-C"], do: base ++ ["-C", Integer.to_string(input["-C"])], else: base
-
-    if offset > 0 or head_limit do
-      base ++ ["--max-count", Integer.to_string(offset + head_limit)]
-    else
-      base
-    end
+    mode_arg(mode)
+    |> Kernel.++(mode_flags(input))
+    |> Kernel.++([pattern])
+    |> append_flag(input["glob"], &["--glob", &1])
+    |> append_flag(input["type"], &["--type", &1])
+    |> append_flag(input["-i"], fn _ -> ["-i"] end)
+    |> append_flag(input["-n"], fn _ -> ["-n"] end)
+    |> append_flag(input["multiline"], fn _ -> ["-U", "--multiline-dotall"] end)
+    |> append_flag(input["-B"], &["-B", Integer.to_string(&1)])
+    |> append_flag(input["-A"], &["-A", Integer.to_string(&1)])
+    |> append_flag(input["-C"], &["-C", Integer.to_string(&1)])
+    |> append_max_count(mode, input)
   end
 
-  defp apply_offset(output, 0), do: output
+  defp mode_arg("files_with_matches"), do: ["-l"]
+  defp mode_arg("count"), do: ["-c"]
+  defp mode_arg(_mode), do: []
 
-  defp apply_offset(output, offset) do
+  defp append_flag(base, nil, _to_args), do: base
+  defp append_flag(base, false, _to_args), do: base
+  defp append_flag(base, value, to_args), do: base ++ to_args.(value)
+
+  defp append_max_count(base, "content", input) do
+    head_limit = input["head_limit"] || @default_head_limit
+    offset = input["offset"] || 0
+    base ++ ["--max-count", Integer.to_string(offset + head_limit)]
+  end
+
+  defp append_max_count(base, _mode, _input), do: base
+
+  defp paginate(output, offset, head_limit) do
     output
     |> String.split("\n")
     |> Enum.drop(offset)
+    |> Enum.take(head_limit)
     |> Enum.join("\n")
   end
 

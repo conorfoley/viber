@@ -150,8 +150,10 @@ defmodule Viber.API.Providers.OpenAIStreamState do
 
   defp process_finish_reason(st, nil), do: st
 
-  defp process_finish_reason(st, reason),
-    do: %{st | stop_reason: OpenAICompat.normalize_finish_reason(reason)}
+  defp process_finish_reason(st, reason) do
+    tool_calls = Map.new(st.tool_calls, fn {idx, tc} -> {idx, %{tc | stopped: true}} end)
+    %{st | stop_reason: OpenAICompat.normalize_finish_reason(reason), tool_calls: tool_calls}
+  end
 
   @spec finish(t()) :: [term()]
   def finish(%__MODULE__{finished: true}), do: []

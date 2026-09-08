@@ -232,93 +232,150 @@ defmodule Viber.Runtime.Conversation do
 
     {decisions, newly_allowed} =
       Enum.reduce(tool_uses, {[], MapSet.new()}, fn {id, name, input_map}, {acc, allowed_set} ->
-        input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
-        input = ensure_parsed_input(input_map)
-
-        policy =
-          case Map.get(specs_by_name, name) do
-            %Spec{permission_fn: fun} = spec when fun != nil ->
-              effective = Spec.effective_permission(spec, input)
-              Permissions.register_tool(base_policy, name, effective)
-
-            _ ->
-              base_policy
-          end
-
-        already_allowed =
-          MapSet.member?(ctx.allowed_tools, name) or MapSet.member?(allowed_set, name)
-
-        case Permissions.check(policy, name, input_str) do
-          permission when permission in [:allow, :prompt] ->
-            if permission == :allow or already_allowed do
-              {[{:run, id, name, input} | acc], allowed_set}
-            else
-              broker_result =
-                try do
-                  Broker.request(session_id, name, input_str, event_handler)
-                catch
-                  :exit, _ -> :deny
-                end
-
-              case broker_result do
-                :allow ->
-                  {[{:run, id, name, input} | acc], allowed_set}
-
-                :always_allow ->
-                  {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
-
-                :deny ->
-                  reason = "tool '#{name}' denied by user"
-                  {[{:denied, id, name, reason} | acc], allowed_set}
-              end
-            end
-
-          {:deny, reason} ->
-            {[{:denied, id, name, reason} | acc], allowed_set}
-        end
+        decide_tool_use(
+          {id, name, input_map},
+          {acc, allowed_set},
+          ctx,
+          specs_by_name,
+          base_policy,
+          session_id,
+          event_handler
+        )
       end)
 
     decisions = Enum.reverse(decisions)
     ctx = %{ctx | allowed_tools: MapSet.union(ctx.allowed_tools, newly_allowed)}
 
-    run_sequential? =
-      Enum.any?(decisions, fn
-        {:run, _id, name, _input} ->
-          case Map.get(specs_by_name, name) do
-            %Spec{concurrent: false} -> true
-            _ -> false
-          end
-
-        _ ->
-          false
-      end)
-
     results =
-      if run_sequential? do
+      if sequential_execution?(decisions, specs_by_name) do
         Enum.map(decisions, &run_decision(&1, ctx, event_handler))
       else
-        ctx.task_supervisor
-        |> Task.Supervisor.async_stream_nolink(
-          decisions,
-          &run_decision(&1, ctx, event_handler),
-          ordered: true,
-          timeout: 300_000,
-          on_timeout: :kill_task
-        )
-        |> Enum.zip(decisions)
-        |> Enum.map(fn
-          {{:ok, result}, _} ->
-            result
-
-          {{:exit, reason}, {:run, id, name, _}} ->
-            {id, name, "Tool execution failed: #{inspect(reason)}", true}
-
-          {{:exit, reason}, {:denied, id, name, _}} ->
-            {id, name, "Tool execution failed: #{inspect(reason)}", true}
-        end)
+        run_decisions_concurrently(decisions, ctx, event_handler)
       end
 
     {results, ctx}
+  end
+
+  defp decide_tool_use(
+         {id, name, input_map},
+         {acc, allowed_set},
+         ctx,
+         specs_by_name,
+         base_policy,
+         session_id,
+         event_handler
+       ) do
+    input_str = if is_binary(input_map), do: input_map, else: Jason.encode!(input_map)
+    input = ensure_parsed_input(input_map)
+    policy = resolve_tool_policy(specs_by_name, base_policy, name, input)
+
+    already_allowed =
+      MapSet.member?(ctx.allowed_tools, name) or MapSet.member?(allowed_set, name)
+
+    tool_ctx = %{
+      id: id,
+      name: name,
+      input: input,
+      input_str: input_str,
+      already_allowed: already_allowed,
+      session_id: session_id,
+      event_handler: event_handler
+    }
+
+    handle_permission_check(
+      Permissions.check(policy, name, input_str),
+      tool_ctx,
+      {acc, allowed_set}
+    )
+  end
+
+  defp resolve_tool_policy(specs_by_name, base_policy, name, input) do
+    case Map.get(specs_by_name, name) do
+      %Spec{permission_fn: fun} = spec when fun != nil ->
+        effective = Spec.effective_permission(spec, input)
+        Permissions.register_tool(base_policy, name, effective)
+
+      _ ->
+        base_policy
+    end
+  end
+
+  defp handle_permission_check({:deny, reason}, %{id: id, name: name}, {acc, allowed_set}) do
+    {[{:denied, id, name, reason} | acc], allowed_set}
+  end
+
+  defp handle_permission_check(permission, tool_ctx, {acc, allowed_set})
+       when permission in [:allow, :prompt] do
+    if permission == :allow or tool_ctx.already_allowed do
+      {[{:run, tool_ctx.id, tool_ctx.name, tool_ctx.input} | acc], allowed_set}
+    else
+      resolve_via_broker(tool_ctx, {acc, allowed_set})
+    end
+  end
+
+  defp resolve_via_broker(tool_ctx, {acc, allowed_set}) do
+    %{
+      id: id,
+      name: name,
+      input: input,
+      input_str: input_str,
+      session_id: session_id,
+      event_handler: event_handler
+    } = tool_ctx
+
+    broker_result =
+      try do
+        Broker.request(session_id, name, input_str, event_handler)
+      catch
+        :exit, _ -> :deny
+      end
+
+    case broker_result do
+      :allow ->
+        {[{:run, id, name, input} | acc], allowed_set}
+
+      :always_allow ->
+        {[{:run, id, name, input} | acc], MapSet.put(allowed_set, name)}
+
+      :deny ->
+        reason = "tool '#{name}' denied by user"
+        {[{:denied, id, name, reason} | acc], allowed_set}
+    end
+  end
+
+  defp sequential_execution?(decisions, specs_by_name) do
+    Enum.any?(decisions, fn
+      {:run, _id, name, _input} ->
+        case Map.get(specs_by_name, name) do
+          %Spec{concurrent: false} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  defp run_decisions_concurrently(decisions, ctx, event_handler) do
+    ctx.task_supervisor
+    |> Task.Supervisor.async_stream_nolink(
+      decisions,
+      &run_decision(&1, ctx, event_handler),
+      ordered: true,
+      timeout: 300_000,
+      on_timeout: :kill_task
+    )
+    |> Enum.zip(decisions)
+    |> Enum.map(fn
+      {{:ok, result}, _} ->
+        result
+
+      {{:exit, reason}, {:run, id, name, _}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+
+      {{:exit, reason}, {:denied, id, name, _}} ->
+        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+    end)
   end
 
   defp run_decision({:run, id, name, input}, ctx, event_handler)
@@ -346,17 +403,7 @@ defmodule Viber.Runtime.Conversation do
           "Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
         )
 
-        if name == "browser_navigate" do
-          case BrowserAction.Broker.wait_for_tab_ready(session_id) do
-            :ok ->
-              Logger.info("Conversation: tab ready after navigate id=#{id}")
-
-            {:error, :timeout} ->
-              Logger.warning(
-                "Conversation: tab_ready timeout after navigate id=#{id}, proceeding anyway"
-              )
-          end
-        end
+        maybe_wait_for_tab_ready(name, session_id, id)
 
         event_handler.(
           Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
@@ -435,6 +482,20 @@ defmodule Viber.Runtime.Conversation do
     {id, name, reason, true}
   end
 
+  defp maybe_wait_for_tab_ready("browser_navigate", session_id, id) do
+    case BrowserAction.Broker.wait_for_tab_ready(session_id) do
+      :ok ->
+        Logger.info("Conversation: tab ready after navigate id=#{id}")
+
+      {:error, :timeout} ->
+        Logger.warning(
+          "Conversation: tab_ready timeout after navigate id=#{id}, proceeding anyway"
+        )
+    end
+  end
+
+  defp maybe_wait_for_tab_ready(_name, _session_id, _id), do: :ok
+
   defp parse_tool_input(input) when is_binary(input) do
     case Jason.decode(input) do
       {:ok, map} when is_map(map) -> map
@@ -458,48 +519,49 @@ defmodule Viber.Runtime.Conversation do
   end
 
   defp sanitize_message(%{role: :assistant, blocks: blocks} = msg, next_msg) do
-    tool_use_ids =
-      Enum.flat_map(blocks, fn
-        {:tool_use, id, _name, _input} -> [id]
-        _ -> []
-      end)
+    tool_use_ids = extract_tool_use_ids(blocks)
 
     if tool_use_ids == [] do
       msg
     else
-      result_ids =
-        case next_msg do
-          %{blocks: next_blocks} ->
-            Enum.flat_map(next_blocks, fn
-              {:tool_result, id, _name, _output, _err} -> [id]
-              _ -> []
-            end)
-
-          nil ->
-            []
-        end
-
-      missing = tool_use_ids -- result_ids
-
-      if missing == [] do
-        msg
-      else
-        clean_blocks =
-          Enum.reject(blocks, fn
-            {:tool_use, id, _name, _input} -> id in missing
-            _ -> false
-          end)
-
-        if clean_blocks == [] do
-          nil
-        else
-          %{msg | blocks: clean_blocks}
-        end
-      end
+      missing = tool_use_ids -- result_ids_for(next_msg)
+      drop_missing_tool_uses(msg, blocks, missing)
     end
   end
 
   defp sanitize_message(msg, _next), do: msg
+
+  defp extract_tool_use_ids(blocks) do
+    Enum.flat_map(blocks, fn
+      {:tool_use, id, _name, _input} -> [id]
+      _ -> []
+    end)
+  end
+
+  defp result_ids_for(nil), do: []
+
+  defp result_ids_for(%{blocks: next_blocks}) do
+    Enum.flat_map(next_blocks, fn
+      {:tool_result, id, _name, _output, _err} -> [id]
+      _ -> []
+    end)
+  end
+
+  defp drop_missing_tool_uses(msg, _blocks, []), do: msg
+
+  defp drop_missing_tool_uses(msg, blocks, missing) do
+    clean_blocks =
+      Enum.reject(blocks, fn
+        {:tool_use, id, _name, _input} -> id in missing
+        _ -> false
+      end)
+
+    if clean_blocks == [] do
+      %{msg | blocks: [{:text, "[tool call interrupted - no results available]"}]}
+    else
+      %{msg | blocks: clean_blocks}
+    end
+  end
 
   defp to_api_message(%{role: role, blocks: blocks}) do
     api_role =

@@ -5,8 +5,6 @@ defmodule Viber.Application do
 
   use Application
 
-  require Logger
-
   @impl true
   def start(_type, _args) do
     maybe_add_file_logger()

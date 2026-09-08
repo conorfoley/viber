@@ -407,8 +407,10 @@ defmodule Viber.API.Providers.OpenAICompat do
   def normalize_base_url(url, _config), do: url
 
   defp chat_completions_path(%__MODULE__{} = config) do
-    base_url = System.get_env(config.base_url_env) || config.default_base_url
-    trimmed = String.trim_trailing(base_url, "/")
+    raw_url =
+      config.base_url_override || System.get_env(config.base_url_env) || config.default_base_url
+
+    trimmed = String.trim_trailing(raw_url, "/")
 
     if String.ends_with?(trimmed, "/chat/completions") do
       ""
@@ -499,41 +501,47 @@ defmodule Viber.API.Providers.OpenAICompat do
   end
 
   defp parse_openai_frame(frame) do
-    trimmed = String.trim(frame)
+    frame
+    |> String.trim()
+    |> extract_openai_payload()
+    |> decode_openai_payload()
+  end
 
-    if trimmed == "" do
-      {:ok, nil}
-    else
-      data_lines =
-        trimmed
-        |> String.split("\n")
-        |> Enum.flat_map(fn line ->
-          cond do
-            String.starts_with?(line, ":") ->
-              []
+  defp extract_openai_payload(""), do: nil
 
-            String.starts_with?(line, "data:") ->
-              [String.trim_leading(String.trim_leading(line, "data:"), " ")]
+  defp extract_openai_payload(trimmed) do
+    trimmed
+    |> String.split("\n")
+    |> Enum.flat_map(&openai_data_line/1)
+    |> join_openai_payload()
+  end
 
-            true ->
-              []
-          end
-        end)
+  defp openai_data_line(line) do
+    cond do
+      String.starts_with?(line, ":") ->
+        []
 
-      if data_lines == [] do
-        {:ok, nil}
-      else
-        payload = Enum.join(data_lines, "\n")
+      String.starts_with?(line, "data:") ->
+        [String.trim_leading(String.trim_leading(line, "data:"), " ")]
 
-        if payload == "[DONE]" do
-          {:ok, nil}
-        else
-          case Jason.decode(payload) do
-            {:ok, chunk} -> {:ok, chunk}
-            {:error, _} -> {:ok, nil}
-          end
-        end
-      end
+      true ->
+        []
+    end
+  end
+
+  defp join_openai_payload([]), do: nil
+
+  defp join_openai_payload(data_lines) do
+    payload = Enum.join(data_lines, "\n")
+    if payload == "[DONE]", do: nil, else: payload
+  end
+
+  defp decode_openai_payload(nil), do: {:ok, nil}
+
+  defp decode_openai_payload(payload) do
+    case Jason.decode(payload) do
+      {:ok, chunk} -> {:ok, chunk}
+      {:error, _} -> {:ok, nil}
     end
   end
 

@@ -46,22 +46,22 @@ defmodule Viber.API.Client do
   def detect_provider(model) do
     model = resolve_model_alias(model)
 
+    detect_provider_by_prefix(model) || detect_provider_by_env()
+  end
+
+  defp detect_provider_by_prefix(model) do
     cond do
-      String.starts_with?(model, "ollama:") ->
-        :ollama
+      String.starts_with?(model, "ollama:") -> :ollama
+      String.starts_with?(model, "claude") -> :anthropic
+      String.starts_with?(model, "grok") -> :xai
+      String.starts_with?(model, "gpt-") -> :openai
+      String.match?(model, ~r/^o\d/) -> :openai
+      true -> nil
+    end
+  end
 
-      String.starts_with?(model, "claude") ->
-        :anthropic
-
-      String.starts_with?(model, "grok") ->
-        :xai
-
-      String.starts_with?(model, "gpt-") ->
-        :openai
-
-      String.match?(model, ~r/^o\d/) ->
-        :openai
-
+  defp detect_provider_by_env do
+    cond do
       env_key_set?("ANTHROPIC_API_KEY") ->
         :anthropic
 
@@ -101,12 +101,10 @@ defmodule Viber.API.Client do
   def max_tokens_for_model(model) do
     canonical = resolve_model_alias(model)
 
-    cond do
-      String.starts_with?(canonical, "ollama:") ->
-        nil
-
-      true ->
-        Map.get(@model_max_tokens, canonical, 64_000)
+    if String.starts_with?(canonical, "ollama:") do
+      nil
+    else
+      Map.get(@model_max_tokens, canonical, 64_000)
     end
   end
 
@@ -239,7 +237,7 @@ defmodule Viber.API.Client do
 
     with {:ok, _kind, module} <- from_model(model) do
       request = apply_config_overrides(request, opts)
-      send_with_retry(module, request)
+      send_with_retry(module, request, opts)
     end
   end
 

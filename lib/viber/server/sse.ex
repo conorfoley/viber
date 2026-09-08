@@ -50,6 +50,7 @@ defmodule Viber.Server.SSE do
           {:ok, conn} ->
             if terminal?(type) do
               Logger.info("SSE: stream complete event=#{type} session=#{session_id}")
+              Process.demonitor(monitor_ref, [:flush])
               conn
             else
               stream_loop(conn, session_id, monitor_ref)
@@ -60,6 +61,7 @@ defmodule Viber.Server.SSE do
               "SSE: send error event=#{type} session=#{session_id} reason=#{inspect(reason)}"
             )
 
+            Process.demonitor(monitor_ref, [:flush])
             conn
         end
 
@@ -69,6 +71,7 @@ defmodule Viber.Server.SSE do
     after
       300_000 ->
         Logger.warning("SSE: stream timeout session=#{session_id}")
+        Process.demonitor(monitor_ref, [:flush])
         conn
     end
   end

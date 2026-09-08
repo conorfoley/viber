@@ -68,21 +68,27 @@ defmodule Viber.Runtime.Config do
   @spec merge(t(), t()) :: t()
   def merge(%__MODULE__{} = base, %__MODULE__{} = override) do
     %__MODULE__{
-      model: override.model || base.model,
-      provider: override.provider || base.provider,
-      base_url: override.base_url || base.base_url,
-      api_key: override.api_key || base.api_key,
-      permission_mode: override.permission_mode || base.permission_mode,
-      max_iterations: override.max_iterations || base.max_iterations,
-      effort: override.effort || base.effort,
-      thinking: override.thinking || base.thinking,
+      model: coalesce(override.model, base.model),
+      provider: coalesce(override.provider, base.provider),
+      base_url: coalesce(override.base_url, base.base_url),
+      api_key: coalesce(override.api_key, base.api_key),
+      permission_mode: coalesce(override.permission_mode, base.permission_mode),
+      max_iterations: coalesce(override.max_iterations, base.max_iterations),
+      effort: coalesce(override.effort, base.effort),
+      thinking: coalesce(override.thinking, base.thinking),
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
-      hooks: %{
-        pre_tool_use: base.hooks.pre_tool_use ++ override.hooks.pre_tool_use,
-        post_tool_use: base.hooks.post_tool_use ++ override.hooks.post_tool_use
-      },
-      custom_instructions: override.custom_instructions || base.custom_instructions,
+      hooks: merge_hooks(base.hooks, override.hooks),
+      custom_instructions: coalesce(override.custom_instructions, base.custom_instructions),
       loaded_entries: base.loaded_entries ++ override.loaded_entries
+    }
+  end
+
+  defp coalesce(override_value, base_value), do: override_value || base_value
+
+  defp merge_hooks(base_hooks, override_hooks) do
+    %{
+      pre_tool_use: base_hooks.pre_tool_use ++ override_hooks.pre_tool_use,
+      post_tool_use: base_hooks.post_tool_use ++ override_hooks.post_tool_use
     }
   end
 
@@ -115,21 +121,21 @@ defmodule Viber.Runtime.Config do
 
   @spec get(t(), String.t()) :: term()
   def get(%__MODULE__{} = config, path) do
-    case String.split(path, ".") do
-      ["model"] -> config.model
-      ["provider"] -> config.provider
-      ["baseUrl"] -> config.base_url
-      ["permissionMode"] -> config.permission_mode
-      ["customInstructions"] -> config.custom_instructions
-      ["maxIterations"] -> config.max_iterations
-      ["effort"] -> config.effort
-      ["thinking"] -> config.thinking
-      ["mcpServers"] -> config.mcp_servers
-      ["mcpServers", name] -> Map.get(config.mcp_servers, name)
-      ["hooks"] -> config.hooks
-      _ -> nil
-    end
+    get_by_segments(config, String.split(path, "."))
   end
+
+  defp get_by_segments(config, ["model"]), do: config.model
+  defp get_by_segments(config, ["provider"]), do: config.provider
+  defp get_by_segments(config, ["baseUrl"]), do: config.base_url
+  defp get_by_segments(config, ["permissionMode"]), do: config.permission_mode
+  defp get_by_segments(config, ["customInstructions"]), do: config.custom_instructions
+  defp get_by_segments(config, ["maxIterations"]), do: config.max_iterations
+  defp get_by_segments(config, ["effort"]), do: config.effort
+  defp get_by_segments(config, ["thinking"]), do: config.thinking
+  defp get_by_segments(config, ["mcpServers"]), do: config.mcp_servers
+  defp get_by_segments(config, ["mcpServers", name]), do: Map.get(config.mcp_servers, name)
+  defp get_by_segments(config, ["hooks"]), do: config.hooks
+  defp get_by_segments(_config, _segments), do: nil
 
   defp discover(project_root) do
     user_path = user_config_path()

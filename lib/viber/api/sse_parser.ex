@@ -11,22 +11,32 @@ defmodule Viber.API.SSEParser do
 
   @spec next_frame(binary()) :: {binary(), binary()} | nil
   def next_frame(buf) do
-    cond do
-      (pos = :binary.match(buf, "\n\n")) != :nomatch ->
-        {start, _len} = pos
-        frame = binary_part(buf, 0, start)
-        rest = binary_part(buf, start + 2, byte_size(buf) - start - 2)
-        {frame, rest}
+    pos_lf = :binary.match(buf, "\n\n")
+    pos_crlf = :binary.match(buf, "\r\n\r\n")
 
-      (pos = :binary.match(buf, "\r\n\r\n")) != :nomatch ->
-        {start, _len} = pos
-        frame = binary_part(buf, 0, start)
-        rest = binary_part(buf, start + 4, byte_size(buf) - start - 4)
-        {frame, rest}
-
-      true ->
+    case {pos_lf, pos_crlf} do
+      {:nomatch, :nomatch} ->
         nil
+
+      {{start_lf, _}, :nomatch} ->
+        do_split(buf, start_lf, 2)
+
+      {:nomatch, {start_crlf, _}} ->
+        do_split(buf, start_crlf, 4)
+
+      {{start_lf, _}, {start_crlf, _}} ->
+        if start_lf <= start_crlf do
+          do_split(buf, start_lf, 2)
+        else
+          do_split(buf, start_crlf, 4)
+        end
     end
+  end
+
+  defp do_split(buf, start, len) do
+    frame = binary_part(buf, 0, start)
+    rest = binary_part(buf, start + len, byte_size(buf) - start - len)
+    {frame, rest}
   end
 
   @spec push(t(), binary()) :: {:ok, t(), [Viber.API.Types.stream_event()]} | {:error, term()}
@@ -63,56 +73,67 @@ defmodule Viber.API.SSEParser do
   end
 
   defp parse_frame(frame) do
-    trimmed = String.trim(frame)
+    frame
+    |> String.trim()
+    |> parse_trimmed_frame()
+  end
 
-    if trimmed == "" do
-      {:ok, nil}
-    else
-      {event_name, data_lines} =
-        trimmed
-        |> String.split("\n")
-        |> Enum.map(&String.trim_trailing(&1, "\r"))
-        |> Enum.reduce({nil, []}, fn line, {ev, data} ->
-          cond do
-            String.starts_with?(line, ":") ->
-              {ev, data}
+  defp parse_trimmed_frame(""), do: {:ok, nil}
 
-            String.starts_with?(line, "event:") ->
-              {String.trim(String.trim_leading(line, "event:")), data}
+  defp parse_trimmed_frame(trimmed) do
+    {event_name, data_lines} = parse_frame_lines(trimmed)
+    build_frame_result(event_name, data_lines)
+  end
 
-            String.starts_with?(line, "data:") ->
-              {ev, [String.trim_leading(String.trim_leading(line, "data:"), " ") | data]}
+  defp parse_frame_lines(trimmed) do
+    trimmed
+    |> String.split("\n")
+    |> Enum.map(&String.trim_trailing(&1, "\r"))
+    |> Enum.reduce({nil, []}, &accumulate_frame_line/2)
+  end
 
-            true ->
-              {ev, data}
-          end
-        end)
+  defp accumulate_frame_line(line, {ev, data}) do
+    cond do
+      String.starts_with?(line, ":") ->
+        {ev, data}
 
-      cond do
-        event_name == "ping" ->
-          {:ok, nil}
+      String.starts_with?(line, "event:") ->
+        {String.trim(String.trim_leading(line, "event:")), data}
 
-        data_lines == [] ->
-          {:ok, nil}
+      String.starts_with?(line, "data:") ->
+        {ev, [String.trim_leading(String.trim_leading(line, "data:"), " ") | data]}
 
-        true ->
-          payload = data_lines |> Enum.reverse() |> Enum.join("\n")
+      true ->
+        {ev, data}
+    end
+  end
 
-          if payload == "[DONE]" do
-            {:ok, nil}
-          else
-            case Jason.decode(payload) do
-              {:ok, json} ->
-                case Viber.API.Types.decode_stream_event(json) do
-                  nil -> {:ok, nil}
-                  event -> {:ok, event}
-                end
+  defp build_frame_result("ping", _data_lines), do: {:ok, nil}
+  defp build_frame_result(_event_name, []), do: {:ok, nil}
 
-              {:error, reason} ->
-                {:error, %Viber.API.Error{type: :json, message: "json error: #{inspect(reason)}"}}
-            end
-          end
-      end
+  defp build_frame_result(_event_name, data_lines) do
+    data_lines
+    |> Enum.reverse()
+    |> Enum.join("\n")
+    |> decode_frame_payload()
+  end
+
+  defp decode_frame_payload("[DONE]"), do: {:ok, nil}
+
+  defp decode_frame_payload(payload) do
+    case Jason.decode(payload) do
+      {:ok, json} ->
+        decode_frame_json(json)
+
+      {:error, reason} ->
+        {:error, %Viber.API.Error{type: :json, message: "json error: #{inspect(reason)}"}}
+    end
+  end
+
+  defp decode_frame_json(json) do
+    case Viber.API.Types.decode_stream_event(json) do
+      nil -> {:ok, nil}
+      event -> {:ok, event}
     end
   end
 end

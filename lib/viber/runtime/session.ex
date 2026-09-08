@@ -359,6 +359,8 @@ defmodule Viber.Runtime.Session do
     %{
       "id" => state.id,
       "version" => state.version,
+      "model" => state.model,
+      "project_root" => state.project_root,
       "messages" => state.messages |> Enum.reverse() |> Enum.map(&SessionStore.encode_message/1)
     }
   end
@@ -370,6 +372,8 @@ defmodule Viber.Runtime.Session do
     %__MODULE__{
       id: data["id"] || generate_id(),
       version: data["version"] || 1,
+      model: data["model"],
+      project_root: data["project_root"],
       messages: Enum.reverse(messages),
       cumulative_usage: recompute_usage(messages),
       storage_path: path

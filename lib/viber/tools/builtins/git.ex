@@ -45,8 +45,17 @@ defmodule Viber.Tools.Builtins.Git do
 
   defp build_args(subcommand, input) do
     extra = input["args"] || []
+    extra = normalize_args(extra)
     [subcommand | extra]
   end
+
+  defp normalize_args(args) when is_list(args) do
+    Enum.map(args, &to_string/1)
+  end
+
+  defp normalize_args(arg) when is_binary(arg), do: [arg]
+
+  defp normalize_args(_), do: []
 
   defp truncate_output(output) when byte_size(output) > @max_output_bytes do
     binary_part(output, 0, @max_output_bytes) <> "\n... (output truncated at 100KB)"

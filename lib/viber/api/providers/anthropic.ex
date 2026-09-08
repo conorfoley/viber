@@ -57,14 +57,7 @@ defmodule Viber.API.Providers.Anthropic do
              into: :self
            ) do
         {:ok, %{status: status, headers: headers, body: async}} when status in 200..299 ->
-          content_type = get_header(headers, "content-type")
-
-          if content_type && not String.contains?(content_type, "text/event-stream") do
-            Logger.warning(
-              "Anthropic stream_message: unexpected content-type #{content_type}, expected text/event-stream"
-            )
-          end
-
+          warn_on_unexpected_content_type(headers)
           Logger.debug("Anthropic stream_message: stream started, status=#{status}")
           {:ok, build_event_stream(async)}
 
@@ -83,6 +76,16 @@ defmodule Viber.API.Providers.Anthropic do
              retryable: true
            }}
       end
+    end
+  end
+
+  defp warn_on_unexpected_content_type(headers) do
+    content_type = get_header(headers, "content-type")
+
+    if content_type && not String.contains?(content_type, "text/event-stream") do
+      Logger.warning(
+        "Anthropic stream_message: unexpected content-type #{content_type}, expected text/event-stream"
+      )
     end
   end
 
@@ -188,63 +191,72 @@ defmodule Viber.API.Providers.Anthropic do
 
     Stream.resource(
       fn -> {async, SSEParser.new(), 0} end,
-      fn
-        :done ->
-          {:halt, :done}
-
-        {async, parser, chunk_count} ->
-          ref = async.ref
-
-          receive do
-            {^ref, _} = message ->
-              case async.stream_fun.(ref, message) do
-                {:ok, [data: chunk]} ->
-                  new_count = chunk_count + 1
-
-                  if new_count == 1,
-                    do:
-                      Logger.debug(
-                        "Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)"
-                      )
-
-                  if rem(new_count, 50) == 0,
-                    do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
-
-                  case SSEParser.push(parser, chunk) do
-                    {:ok, new_parser, events} -> {events, {async, new_parser, new_count}}
-                    {:error, _} = err -> {[err], {async, parser, new_count}}
-                  end
-
-                {:ok, [:done]} ->
-                  Logger.debug("Anthropic SSE: stream done after #{chunk_count} chunks")
-
-                  case SSEParser.finish(parser) do
-                    {:ok, events} -> {events, :done}
-                    {:error, _} = err -> {[err], :done}
-                  end
-
-                {:ok, [trailers: _]} ->
-                  {[], {async, parser, chunk_count}}
-
-                {:error, e} ->
-                  Logger.error("Anthropic SSE: stream error #{inspect(e)}")
-                  {[{:stream_error, e}], :done}
-              end
-
-            other ->
-              Logger.warning("Anthropic SSE: unexpected message: #{inspect(other)}")
-              {[], {async, parser, chunk_count}}
-          after
-            60_000 ->
-              Logger.warning(
-                "Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)"
-              )
-
-              {[], {async, parser, chunk_count}}
-          end
-      end,
+      &next_stream_event/1,
       fn _ -> :ok end
     )
+  end
+
+  defp next_stream_event(:done), do: {:halt, :done}
+
+  defp next_stream_event({async, parser, chunk_count}) do
+    ref = async.ref
+
+    receive do
+      {^ref, _} = message ->
+        handle_stream_message(async, ref, parser, chunk_count, message)
+
+      other ->
+        Logger.warning("Anthropic SSE: unexpected message: #{inspect(other)}")
+        {[], {async, parser, chunk_count}}
+    after
+      60_000 ->
+        Logger.warning(
+          "Anthropic SSE: no data received for 60s, may be stalled (#{chunk_count} chunks so far)"
+        )
+
+        {[], {async, parser, chunk_count}}
+    end
+  end
+
+  defp handle_stream_message(async, ref, parser, chunk_count, message) do
+    case async.stream_fun.(ref, message) do
+      {:ok, [data: chunk]} ->
+        handle_stream_chunk(async, parser, chunk_count, chunk)
+
+      {:ok, [:done]} ->
+        Logger.debug("Anthropic SSE: stream done after #{chunk_count} chunks")
+
+        case SSEParser.finish(parser) do
+          {:ok, events} -> {events, :done}
+          {:error, _} = err -> {[err], :done}
+        end
+
+      {:ok, [trailers: _]} ->
+        {[], {async, parser, chunk_count}}
+
+      {:error, e} ->
+        Logger.error("Anthropic SSE: stream error #{inspect(e)}")
+        {[{:stream_error, e}], :done}
+    end
+  end
+
+  defp handle_stream_chunk(async, parser, chunk_count, chunk) do
+    new_count = chunk_count + 1
+    log_chunk_progress(new_count, chunk)
+
+    case SSEParser.push(parser, chunk) do
+      {:ok, new_parser, events} -> {events, {async, new_parser, new_count}}
+      {:error, _} = err -> {[err], {async, parser, new_count}}
+    end
+  end
+
+  defp log_chunk_progress(1, chunk) do
+    Logger.debug("Anthropic SSE: first chunk received (#{byte_size(chunk)} bytes)")
+  end
+
+  defp log_chunk_progress(new_count, _chunk) do
+    if rem(new_count, 50) == 0,
+      do: Logger.debug("Anthropic SSE: #{new_count} chunks received")
   end
 
   defp collect_async_body(%Req.Response.Async{} = async) do

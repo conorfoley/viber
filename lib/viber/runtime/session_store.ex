@@ -7,8 +7,6 @@ defmodule Viber.Runtime.SessionStore do
   import Ecto.Changeset
   import Ecto.Query
 
-  require Logger
-
   alias Viber.Repo
   alias Viber.Runtime.{Session, Usage}
 

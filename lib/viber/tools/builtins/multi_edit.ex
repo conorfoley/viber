@@ -12,7 +12,7 @@ defmodule Viber.Tools.Builtins.MultiEdit do
         }
 
   @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
-  def execute(%{"edits" => edits}) when is_list(edits) and length(edits) > 0 do
+  def execute(%{"edits" => [_ | _] = edits}) do
     with :ok <- validate_edits(edits),
          {:ok, originals} <- read_all_files(edits),
          {:ok, patched} <- apply_all_edits(edits, originals) do
@@ -69,35 +69,36 @@ defmodule Viber.Tools.Builtins.MultiEdit do
   defp apply_all_edits(edits, file_contents) do
     Enum.reduce_while(Enum.with_index(edits), {:ok, file_contents}, fn {edit, idx},
                                                                        {:ok, contents} ->
-      path = edit["path"]
-      old = edit["old_string"]
-      new = edit["new_string"]
-      replace_all = edit["replace_all"] || false
-      content = contents[path]
-
-      count = count_occurrences(content, old)
-
-      cond do
-        count == 0 ->
-          {:halt, {:error, "Edit #{idx}: old_string not found in #{path}"}}
-
-        count > 1 and not replace_all ->
-          {:halt,
-           {:error,
-            "Edit #{idx}: old_string found #{count} times in #{path}; set replace_all or use a more specific match"}}
-
-        true ->
-          new_content =
-            if replace_all do
-              String.replace(content, old, new)
-            else
-              replace_first(content, old, new)
-            end
-
-          {:cont, {:ok, Map.put(contents, path, new_content)}}
-      end
+      apply_one_edit(edit, idx, contents)
     end)
   end
+
+  defp apply_one_edit(edit, idx, contents) do
+    path = edit["path"]
+    old = edit["old_string"]
+    new = edit["new_string"]
+    replace_all = edit["replace_all"] || false
+    content = contents[path]
+
+    count = count_occurrences(content, old)
+
+    cond do
+      count == 0 ->
+        {:halt, {:error, "Edit #{idx}: old_string not found in #{path}"}}
+
+      count > 1 and not replace_all ->
+        {:halt,
+         {:error,
+          "Edit #{idx}: old_string found #{count} times in #{path}; set replace_all or use a more specific match"}}
+
+      true ->
+        new_content = replace_content(content, old, new, replace_all)
+        {:cont, {:ok, Map.put(contents, path, new_content)}}
+    end
+  end
+
+  defp replace_content(content, old, new, true), do: String.replace(content, old, new)
+  defp replace_content(content, old, new, false), do: replace_first(content, old, new)
 
   defp write_all(originals, patched) do
     tmp_suffix = ".viber_tmp_#{System.unique_integer([:positive])}"
