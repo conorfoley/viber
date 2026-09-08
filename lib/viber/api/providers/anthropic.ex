@@ -296,11 +296,4 @@ defmodule Viber.API.Providers.Anthropic do
       _ -> nil
     end
   end
-
-  defp get_header(headers, name) when is_list(headers) do
-    case List.keyfind(headers, name, 0) do
-      {_, value} -> value
-      nil -> nil
-    end
-  end
 end

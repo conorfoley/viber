@@ -30,7 +30,7 @@ defmodule Viber.Scheduler.JobStore do
     GenServer.call(__MODULE__, {:get_job_by_name, name})
   end
 
-  @spec create_job(map()) :: {:ok, Job.t()} | {:error, Ecto.Changeset.t()}
+  @spec create_job(map()) :: {:ok, Job.t()} | {:error, Ecto.Changeset.t() | String.t()}
   def create_job(attrs) do
     GenServer.call(__MODULE__, {:create_job, attrs})
   end

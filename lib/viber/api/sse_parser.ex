@@ -131,9 +131,6 @@ defmodule Viber.API.SSEParser do
   end
 
   defp decode_frame_json(json) do
-    case Viber.API.Types.decode_stream_event(json) do
-      nil -> {:ok, nil}
-      event -> {:ok, event}
-    end
+    {:ok, Viber.API.Types.decode_stream_event(json)}
   end
 end

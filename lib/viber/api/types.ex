@@ -26,7 +26,7 @@ defmodule Viber.API.Types do
     }
   end
 
-  @spec decode_stream_event(map()) :: stream_event()
+  @spec decode_stream_event(map()) :: stream_event() | nil
   def decode_stream_event(%{"type" => "message_start", "message" => msg}) do
     {:message_start, decode_response(msg)}
   end
