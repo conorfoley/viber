@@ -14,6 +14,7 @@ defmodule Viber.Commands.Handlers.Config do
     lines = [
       "Model: #{config.model || "(default)"}",
       "Permission mode: #{config.permission_mode || "(default)"}",
+      "Sub-agents: #{if config.enable_subagents == false, do: "disabled", else: "enabled"}",
       "MCP servers: #{map_size(config.mcp_servers)}",
       "Custom instructions: #{if config.custom_instructions, do: "yes", else: "no"}",
       "Loaded from: #{format_sources(config.loaded_entries)}"
@@ -26,7 +27,7 @@ defmodule Viber.Commands.Handlers.Config do
     config = context[:config] || %Config{}
     value = Config.get(config, key)
 
-    if value do
+    if not is_nil(value) do
       {:ok, "#{key}: #{inspect(value)}"}
     else
       {:ok, "#{key}: (not set)"}

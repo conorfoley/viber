@@ -304,24 +304,251 @@ defmodule Viber.CLI.Renderer do
     end
   end
 
-  defp read_single_char do
-    case File.open("/dev/tty", [:read, :raw]) do
-      {:ok, tty} -> read_single_char_tty(tty)
-      {:error, _} -> read_single_char_fallback()
+  @doc """
+  Select an item with the arrow keys. Press Enter to choose or `q` to cancel.
+
+  Options may be plain strings or `{label, value}` tuples; the selected value is returned.
+  Returns `nil` when cancelled or when no interactive terminal is available.
+  """
+  @spec select_option([String.t() | {String.t(), term()}], keyword()) :: term() | nil
+  def select_option(options, opts \\ [])
+
+  def select_option([], _opts), do: nil
+
+  def select_option(options, opts) when is_list(options) do
+    entries = Enum.map(options, &normalize_option/1)
+    label = Keyword.get(opts, :label, "Select an option")
+    max_visible = Keyword.get(opts, :max_visible, 12)
+    initial_index = Keyword.get(opts, :initial_index, 0) |> clamp_index(length(entries))
+
+    case tty_device() do
+      {:ok, device} ->
+        select_option_from_tty(device, entries, label, initial_index, max_visible)
+
+      {:error, _reason} ->
+        IO.write(render_error("Interactive selection requires a terminal."))
+        nil
     end
   end
 
-  defp read_single_char_tty(tty) do
-    System.cmd("sh", ["-c", "stty raw -echo < /dev/tty"], stderr_to_stdout: true)
+  defp normalize_option({label, value}), do: {to_string(label), value}
+  defp normalize_option(option), do: {to_string(option), option}
+
+  defp select_option_from_tty(device, entries, label, selected_index, max_visible) do
+    case stty(device, "-g") do
+      {settings, 0} ->
+        stty(device, "raw -echo")
+        IO.write("\e[?25l")
+
+        try do
+          view = %{
+            entries: entries,
+            label: label,
+            count: length(entries),
+            visible: min(length(entries), max(max_visible, 1))
+          }
+
+          offset = scroll_offset(0, selected_index, view)
+          line_count = draw_selection(view, selected_index, offset, nil)
+          selection_loop(view, selected_index, offset, line_count)
+        after
+          IO.write("\e[?25h")
+          stty(device, String.trim(settings))
+        end
+
+      _ ->
+        IO.write(render_error("Could not switch the terminal to raw mode."))
+        nil
+    end
+  end
+
+  defp selection_loop(view, selected_index, offset, line_count) do
+    case read_selection_key() do
+      :select ->
+        IO.write("\r\n")
+        view.entries |> Enum.at(selected_index) |> elem(1)
+
+      :cancel ->
+        IO.write("\rSelection cancelled.\r\n")
+        nil
+
+      :ignore ->
+        selection_loop(view, selected_index, offset, line_count)
+
+      move ->
+        next_index = move_index(move, selected_index, view)
+        next_offset = scroll_offset(offset, next_index, view)
+        line_count = draw_selection(view, next_index, next_offset, line_count)
+        selection_loop(view, next_index, next_offset, line_count)
+    end
+  end
+
+  defp move_index(:up, index, %{count: count}), do: rem(index - 1 + count, count)
+  defp move_index(:down, index, %{count: count}), do: rem(index + 1, count)
+  defp move_index(:page_up, index, %{visible: visible}), do: max(index - visible, 0)
+
+  defp move_index(:page_down, index, %{count: count, visible: visible}),
+    do: min(index + visible, count - 1)
+
+  defp move_index(:home, _index, _view), do: 0
+  defp move_index(:end, _index, %{count: count}), do: count - 1
+
+  defp scroll_offset(offset, index, %{visible: visible, count: count}) do
+    offset =
+      cond do
+        index < offset -> index
+        index >= offset + visible -> index - visible + 1
+        true -> offset
+      end
+
+    offset |> min(count - visible) |> max(0)
+  end
+
+  defp draw_selection(view, selected_index, offset, previous_line_count) do
+    if previous_line_count, do: IO.write("\r\e[#{previous_line_count}A")
+
+    rows =
+      view.entries
+      |> Enum.slice(offset, view.visible)
+      |> Enum.with_index(offset)
+      |> Enum.map(fn {{text, _value}, index} ->
+        if index == selected_index do
+          [IO.ANSI.cyan(), IO.ANSI.bright(), "❯ ", text, IO.ANSI.reset()]
+        else
+          ["  ", text]
+        end
+      end)
+
+    position =
+      if view.count > view.visible, do: " (#{selected_index + 1}/#{view.count})", else: ""
+
+    footer = [
+      IO.ANSI.faint(),
+      "↑/↓ move · Enter select · q cancel",
+      position,
+      IO.ANSI.reset()
+    ]
+
+    lines = [[IO.ANSI.bright(), view.label, IO.ANSI.reset()] | rows] ++ [footer]
+    Enum.each(lines, fn line -> IO.write(["\r\e[2K", line, "\r\n"]) end)
+    length(lines)
+  end
+
+  defp read_selection_key() do
+    case read_key_byte() do
+      :eof -> :cancel
+      <<?\e>> -> read_escape_sequence()
+      <<c>> when c in [?\r, ?\n] -> :select
+      <<c>> when c in [?q, ?Q, 3, 4] -> :cancel
+      <<c>> when c in [?k, 16] -> :up
+      <<c>> when c in [?j, 14] -> :down
+      _ -> :ignore
+    end
+  end
+
+  defp read_escape_sequence() do
+    case read_key_byte() do
+      <<c>> when c in [?[, ?O] -> read_csi()
+      <<?\e>> -> :cancel
+      _ -> :ignore
+    end
+  end
+
+  defp read_csi() do
+    case read_key_byte() do
+      <<?A>> -> :up
+      <<?B>> -> :down
+      <<?H>> -> :home
+      <<?F>> -> :end
+      <<c>> when c in ?0..?9 -> read_csi_tilde(<<c>>)
+      _ -> :ignore
+    end
+  end
+
+  defp read_csi_tilde(acc) do
+    case read_key_byte() do
+      <<?~>> -> csi_tilde_key(acc)
+      <<c>> when c in ?0..?9 or c == ?; -> read_csi_tilde(acc <> <<c>>)
+      _ -> :ignore
+    end
+  end
+
+  defp csi_tilde_key(code) when code in ["1", "7"], do: :home
+  defp csi_tilde_key(code) when code in ["4", "8"], do: :end
+  defp csi_tilde_key("5"), do: :page_up
+  defp csi_tilde_key("6"), do: :page_down
+  defp csi_tilde_key(_), do: :ignore
+
+  defp read_key_byte do
+    case IO.getn("", 1) do
+      byte when is_binary(byte) and byte != "" -> byte
+      _ -> :eof
+    end
+  end
+
+  defp tty_device do
+    case tty_device_from_proc() do
+      {:error, :no_proc} ->
+        with {:error, _} <- tty_device_from_ps(), do: dev_tty()
+
+      result ->
+        result
+    end
+  end
+
+  defp dev_tty do
+    if File.exists?("/dev/tty"), do: {:ok, "/dev/tty"}, else: {:error, :no_tty}
+  end
+
+  defp tty_device_from_proc do
+    stdin = "/proc/#{System.pid()}/fd/0"
+
+    case File.read_link(stdin) do
+      {:ok, "/dev/" <> _} -> {:ok, stdin}
+      {:ok, _other} -> {:error, :stdin_not_tty}
+      {:error, _reason} -> {:error, :no_proc}
+    end
+  end
+
+  defp tty_device_from_ps do
+    case System.cmd("ps", ["-o", "tty=", "-p", System.pid()], stderr_to_stdout: true) do
+      {output, 0} ->
+        case String.trim(output) do
+          tty when tty in ["", "?", "??"] -> {:error, :no_ps_tty}
+          tty -> {:ok, "/dev/" <> tty}
+        end
+
+      _ ->
+        {:error, :no_ps_tty}
+    end
+  rescue
+    _ -> {:error, :no_ps_tty}
+  end
+
+  defp stty(device, args) do
+    System.cmd("sh", ["-c", "stty #{args} < '#{device}'"], stderr_to_stdout: true)
+  end
+
+  defp clamp_index(index, count) when is_integer(index), do: index |> max(0) |> min(count - 1)
+  defp clamp_index(_index, _count), do: 0
+
+  defp read_single_char do
+    case tty_device() do
+      {:ok, device} -> read_single_char_tty(device)
+      {:error, _reason} -> read_single_char_fallback()
+    end
+  end
+
+  defp read_single_char_tty(device) do
+    stty(device, "raw -echo")
 
     try do
-      case IO.binread(tty, 1) do
+      case read_key_byte() do
         <<c>> -> c
         _ -> ?\n
       end
     after
-      System.cmd("sh", ["-c", "stty -raw echo < /dev/tty"], stderr_to_stdout: true)
-      File.close(tty)
+      stty(device, "-raw echo")
     end
   rescue
     _ -> read_single_char_fallback()

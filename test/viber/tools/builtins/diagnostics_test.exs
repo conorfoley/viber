@@ -92,6 +92,17 @@ defmodule Viber.Tools.Builtins.DiagnosticsTest do
     end
   end
 
+  describe "non-zero exit codes" do
+    test "credo crash on a nonexistent path returns {:error, _}, not zero findings" do
+      assert {:error, msg} =
+               Diagnostics.execute(%{"tool" => "credo", "path" => "lib/viber/nonexistent_xyz.ex"})
+
+      assert msg =~ "failed (exit code 1)"
+      assert msg =~ "nonexistent_xyz.ex"
+      refute msg =~ "Findings: 0"
+    end
+  end
+
   defp parse_findings_count(result) do
     case Regex.run(~r/Findings: (\d+)/, result) do
       [_, n] -> String.to_integer(n)

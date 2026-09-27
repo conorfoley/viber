@@ -56,6 +56,8 @@ Config files are loaded and merged in order: user → project → local.
 
 Run `/init` in the REPL to scaffold a `.viber/settings.json` in your project root, or create one manually:
 
+Set `"enableSubagents": false` in `.viber/settings.local.json` to keep `spawn_agent` unavailable for a resource-constrained local model. The default is enabled.
+
 ```json
 {
   "model": "sonnet",
@@ -121,7 +123,7 @@ Short aliases resolve to full model names:
 | `grok-mini` | grok-3-mini |
 | `llama3`, `llama3.1`, `llama3.2` | Ollama Llama 3 variants |
 | `mistral`, `codestral` | Ollama Mistral models |
-| `qwen2.5`, `phi4`, `gemma3`, `deepseek-r1` | Other Ollama local models |
+| `qwen`, `qwen2.5`, `phi4`, `gemma3`, `deepseek-r1` | Other Ollama local models |
 
 ### Sub-agents
 

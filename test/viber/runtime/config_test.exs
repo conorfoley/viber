@@ -45,6 +45,40 @@ defmodule Viber.Runtime.ConfigTest do
   end
 
   @tag :tmp_dir
+  test "loads enableSubagents and allows false to override user defaults", %{tmp_dir: tmp_dir} do
+    viber_dir = Path.join(tmp_dir, ".viber")
+    File.mkdir_p!(viber_dir)
+
+    File.write!(
+      Path.join(viber_dir, "settings.json"),
+      Jason.encode!(%{"enableSubagents" => false})
+    )
+
+    {:ok, config} = Config.load(project_root: tmp_dir)
+    assert config.enable_subagents == false
+    assert Config.get(config, "enableSubagents") == false
+
+    merged = Config.merge(%Config{enable_subagents: true}, config)
+    assert merged.enable_subagents == false
+  end
+
+  @tag :tmp_dir
+  test "loads ollamaNumCtx, ignoring non-positive values", %{tmp_dir: tmp_dir} do
+    viber_dir = Path.join(tmp_dir, ".viber")
+    File.mkdir_p!(viber_dir)
+    settings = Path.join(viber_dir, "settings.json")
+
+    File.write!(settings, Jason.encode!(%{"ollamaNumCtx" => 65_536}))
+    {:ok, config} = Config.load(project_root: tmp_dir)
+    assert config.ollama_num_ctx == 65_536
+    assert Config.get(config, "ollamaNumCtx") == 65_536
+
+    File.write!(settings, Jason.encode!(%{"ollamaNumCtx" => 0}))
+    {:ok, config} = Config.load(project_root: tmp_dir)
+    assert config.ollama_num_ctx == nil
+  end
+
+  @tag :tmp_dir
   test "loads provider and base_url from config file", %{tmp_dir: tmp_dir} do
     viber_dir = Path.join(tmp_dir, ".viber")
     File.mkdir_p!(viber_dir)

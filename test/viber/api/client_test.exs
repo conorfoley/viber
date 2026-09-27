@@ -17,6 +17,7 @@ defmodule Viber.API.ClientTest do
     assert Client.resolve_model_alias("llama3") == "ollama:llama3"
     assert Client.resolve_model_alias("mistral") == "ollama:mistral"
     assert Client.resolve_model_alias("codestral") == "ollama:codestral"
+    assert Client.resolve_model_alias("qwen") == "ollama:qwen"
     assert Client.resolve_model_alias("phi4") == "ollama:phi4"
     assert Client.resolve_model_alias("gemma3") == "ollama:gemma3"
     assert Client.resolve_model_alias("deepseek-r1") == "ollama:deepseek-r1"
@@ -46,6 +47,7 @@ defmodule Viber.API.ClientTest do
     System.delete_env("OLLAMA_HOST")
     assert Client.detect_provider("llama3") == :ollama
     assert Client.detect_provider("mistral") == :ollama
+    assert Client.detect_provider("qwen") == :ollama
   end
 
   test "detects :ollama via OLLAMA_HOST env var for bare model names" do
@@ -168,8 +170,8 @@ defmodule Viber.API.ClientTest do
 
   test "from_model returns :ollama for ollama: prefix" do
     System.delete_env("OLLAMA_HOST")
-    assert {:ok, :ollama, Viber.API.Providers.OpenAICompat} = Client.from_model("ollama:llama3")
-    assert {:ok, :ollama, Viber.API.Providers.OpenAICompat} = Client.from_model("llama3")
+    assert {:ok, :ollama, Viber.API.Providers.Ollama} = Client.from_model("ollama:llama3")
+    assert {:ok, :ollama, Viber.API.Providers.Ollama} = Client.from_model("llama3")
   end
 
   describe "send_with_retry" do

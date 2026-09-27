@@ -6,7 +6,7 @@ defmodule Viber.API.Client do
   require Logger
 
   alias Viber.API.{Error, MessageRequest, MessageResponse}
-  alias Viber.API.Providers.{Anthropic, OpenAICompat}
+  alias Viber.API.Providers.{Anthropic, Ollama, OpenAICompat}
 
   @type provider_kind :: :anthropic | :openai | :xai | :ollama
 
@@ -27,6 +27,7 @@ defmodule Viber.API.Client do
     "llama3.2" => "ollama:llama3.2",
     "mistral" => "ollama:mistral",
     "codestral" => "ollama:codestral",
+    "qwen" => "ollama:qwen",
     "qwen2.5" => "ollama:qwen2.5",
     "phi4" => "ollama:phi4",
     "gemma3" => "ollama:gemma3",
@@ -225,7 +226,7 @@ defmodule Viber.API.Client do
       :anthropic -> {:ok, :anthropic, Anthropic}
       :openai -> {:ok, :openai, OpenAICompat}
       :xai -> {:ok, :xai, OpenAICompat}
-      :ollama -> {:ok, :ollama, OpenAICompat}
+      :ollama -> {:ok, :ollama, Ollama}
     end
   end
 
@@ -256,7 +257,7 @@ defmodule Viber.API.Client do
 
   defp apply_config_overrides(request, opts) do
     overrides =
-      Enum.reduce([:base_url, :api_key], %{}, fn key, acc ->
+      Enum.reduce([:base_url, :api_key, :num_ctx], %{}, fn key, acc ->
         case Keyword.get(opts, key) do
           nil -> acc
           val -> Map.put(acc, key, val)

@@ -2,7 +2,7 @@ defmodule Viber.Runtime.ConversationTest do
   use ExUnit.Case, async: true
 
   alias Viber.API.{MessageResponse, Usage}
-  alias Viber.Runtime.{Conversation, Session}
+  alias Viber.Runtime.{Config, Conversation, Session}
 
   defmodule TextOnlyProvider do
     @behaviour Viber.API.Provider
@@ -47,6 +47,8 @@ defmodule Viber.Runtime.ConversationTest do
       Process.put(:turn_count, turn + 1)
 
       if turn == 0 do
+        tool_name = Process.get(:tool_name, "bash")
+
         events = [
           {:message_start,
            %MessageResponse{
@@ -57,7 +59,7 @@ defmodule Viber.Runtime.ConversationTest do
              model: "test",
              usage: %Usage{input_tokens: 20, output_tokens: 10}
            }},
-          {:content_block_start, 0, %{type: "tool_use", id: "tu_1", name: "bash"}},
+          {:content_block_start, 0, %{type: "tool_use", id: "tu_1", name: tool_name}},
           {:content_block_delta, 0, %{type: "input_json_delta", partial_json: "{\"command\":"}},
           {:content_block_delta, 0, %{type: "input_json_delta", partial_json: "\"echo hi\"}"}},
           {:content_block_stop, 0},
@@ -88,6 +90,19 @@ defmodule Viber.Runtime.ConversationTest do
 
         {:ok, events}
       end
+    end
+  end
+
+  defmodule CaptureToolsProvider do
+    @behaviour Viber.API.Provider
+
+    @impl true
+    def send_message(_request), do: {:error, %Viber.API.Error{type: :api, message: "use stream"}}
+
+    @impl true
+    def stream_message(request) do
+      send(Process.get(:captured_tool_names), Enum.map(request.tools, & &1.name))
+      TextOnlyProvider.stream_message(request)
     end
   end
 
@@ -126,6 +141,64 @@ defmodule Viber.Runtime.ConversationTest do
     messages = Session.get_messages(session)
     assert length(messages) == 2
     :ets.delete(events)
+  end
+
+  test "disabled subagents are not offered to the model" do
+    Process.put(:captured_tool_names, self())
+    {:ok, session} = Session.start_link(id: "conv-no-subagents")
+
+    assert {:ok, %{text: "Hello world!"}} =
+             Conversation.run(
+               session: session,
+               model: "ollama:qwen3.8:latest",
+               config: %Config{enable_subagents: false},
+               user_input: "hi",
+               provider_module: CaptureToolsProvider,
+               project_root: System.tmp_dir!(),
+               permission_mode: :allow
+             )
+
+    assert_receive tool_names when is_list(tool_names)
+    refute "spawn_agent" in tool_names
+  after
+    Process.delete(:captured_tool_names)
+  end
+
+  test "disabled subagents cannot run even if the model returns a spawn call" do
+    Process.put(:turn_count, 0)
+    Process.put(:tool_name, "spawn_agent")
+    {:ok, session} = Session.start_link(id: "conv-no-spawn-run")
+    events = :ets.new(:disabled_subagent_events, [:bag, :public])
+
+    result =
+      Conversation.run(
+        session: session,
+        model: "ollama:qwen3.8:latest",
+        config: %Config{enable_subagents: false},
+        user_input: "delegate this",
+        provider_module: ToolUseProvider,
+        event_handler: fn event -> :ets.insert(events, {System.monotonic_time(), event}) end,
+        project_root: System.tmp_dir!(),
+        permission_mode: :allow
+      )
+
+    assert {:ok, %{text: "Done!"}} = result
+
+    recorded = :ets.tab2list(events) |> Enum.map(fn {_, event} -> event end)
+
+    assert Enum.any?(recorded, fn
+             %Viber.Runtime.Event{
+               type: :tool_result,
+               payload: %{name: "spawn_agent", is_error: true, output: output}
+             } ->
+               output =~ "disabled"
+
+             _ ->
+               false
+           end)
+  after
+    Process.delete(:turn_count)
+    Process.delete(:tool_name)
   end
 
   test "tool use triggers execution and follow-up turn" do

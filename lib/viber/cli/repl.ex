@@ -7,6 +7,8 @@ defmodule Viber.CLI.Repl do
 
   alias Viber.CLI.Renderer
   alias Viber.Commands.{Dispatcher, Parser, Result}
+  alias Viber.Commands.Handlers.Model, as: ModelCommand
+  alias Viber.API.Client
   alias Viber.Runtime.Conversation
   alias Viber.Runtime.Event
   alias Viber.Runtime.FileRefs
@@ -70,21 +72,11 @@ defmodule Viber.CLI.Repl do
 
   defp handle_command(input, state) do
     case Parser.parse(input) do
+      {:command, "model", []} ->
+        handle_model_picker(state)
+
       {:command, name, args} ->
-        opts = command_opts(state)
-
-        case Dispatcher.invoke(state.session, name, args, opts) do
-          {:ok, %Result{} = result} ->
-            apply_result(result, name, state)
-
-          {:error, {:unknown_command, n}} ->
-            IO.write(Renderer.render_error("Unknown command: /#{n}"))
-            state
-
-          {:error, reason} ->
-            IO.write(Renderer.render_error(inspect_error(reason)))
-            state
-        end
+        dispatch_command(name, args, state)
 
       {:suggestion, _input, suggestions} ->
         IO.puts("Did you mean /#{List.first(suggestions)}?")
@@ -92,6 +84,46 @@ defmodule Viber.CLI.Repl do
 
       {:not_command, _} ->
         IO.puts("Unknown command.")
+        state
+    end
+  end
+
+  defp handle_model_picker(state) do
+    {choices, ollama_result} =
+      ModelCommand.picker_choices(%{model: state.model, config: state.config})
+
+    current_model = Client.resolve_model_alias(state.model)
+    initial_index = Enum.find_index(choices, fn {_label, model} -> model == current_model end)
+
+    case ollama_result do
+      {:ok, []} -> IO.puts("No Ollama models are installed locally.")
+      {:ok, _models} -> :ok
+      {:error, _reason} -> IO.puts("Ollama is not reachable; showing hosted models only.")
+    end
+
+    case Renderer.select_option(choices,
+           label: "Select a model (current: #{state.model})",
+           initial_index: initial_index || 0
+         ) do
+      nil ->
+        state
+
+      selected_model ->
+        dispatch_command("model", [selected_model], state)
+    end
+  end
+
+  defp dispatch_command(name, args, state) do
+    case Dispatcher.invoke(state.session, name, args, command_opts(state)) do
+      {:ok, %Result{} = result} ->
+        apply_result(result, name, state)
+
+      {:error, {:unknown_command, n}} ->
+        IO.write(Renderer.render_error("Unknown command: /#{n}"))
+        state
+
+      {:error, reason} ->
+        IO.write(Renderer.render_error(inspect_error(reason)))
         state
     end
   end

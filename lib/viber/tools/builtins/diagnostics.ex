@@ -15,7 +15,7 @@ defmodule Viber.Tools.Builtins.Diagnostics do
       end)
 
     case Task.yield(task_ref, @default_timeout) || Task.shutdown(task_ref, :brutal_kill) do
-      {:ok, {output, _exit_code}} ->
+      {:ok, {output, 0}} ->
         if tool_unavailable?(output) do
           {:ok,
            "Tool: #{tool}\nError: #{tool} is not available in this project. Make sure it is listed as a dependency."}
@@ -24,6 +24,9 @@ defmodule Viber.Tools.Builtins.Diagnostics do
           filtered = filter_by_path(findings, path)
           {:ok, format_findings(tool, filtered, output)}
         end
+
+      {:ok, {output, exit_code}} ->
+        {:error, "Tool: #{tool} failed (exit code #{exit_code})\n\n--- Output ---\n#{output}"}
 
       nil ->
         {:ok, "Tool: #{tool}\nError: Analysis exceeded timeout"}

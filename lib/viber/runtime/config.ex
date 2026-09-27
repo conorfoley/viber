@@ -26,6 +26,8 @@ defmodule Viber.Runtime.Config do
           max_iterations: pos_integer() | nil,
           effort: String.t() | nil,
           thinking: String.t() | nil,
+          enable_subagents: boolean() | nil,
+          ollama_num_ctx: pos_integer() | nil,
           mcp_servers: %{String.t() => mcp_server_config()},
           hooks: hooks_config(),
           custom_instructions: String.t() | nil,
@@ -40,6 +42,8 @@ defmodule Viber.Runtime.Config do
             max_iterations: nil,
             effort: nil,
             thinking: nil,
+            enable_subagents: nil,
+            ollama_num_ctx: nil,
             mcp_servers: %{},
             hooks: %{pre_tool_use: [], post_tool_use: []},
             custom_instructions: nil,
@@ -76,6 +80,8 @@ defmodule Viber.Runtime.Config do
       max_iterations: coalesce(override.max_iterations, base.max_iterations),
       effort: coalesce(override.effort, base.effort),
       thinking: coalesce(override.thinking, base.thinking),
+      enable_subagents: coalesce(override.enable_subagents, base.enable_subagents),
+      ollama_num_ctx: coalesce(override.ollama_num_ctx, base.ollama_num_ctx),
       mcp_servers: Map.merge(base.mcp_servers, override.mcp_servers),
       hooks: merge_hooks(base.hooks, override.hooks),
       custom_instructions: coalesce(override.custom_instructions, base.custom_instructions),
@@ -83,7 +89,9 @@ defmodule Viber.Runtime.Config do
     }
   end
 
-  defp coalesce(override_value, base_value), do: override_value || base_value
+  defp coalesce(override_value, base_value) do
+    if is_nil(override_value), do: base_value, else: override_value
+  end
 
   defp merge_hooks(base_hooks, override_hooks) do
     %{
@@ -132,6 +140,8 @@ defmodule Viber.Runtime.Config do
   defp get_by_segments(config, ["maxIterations"]), do: config.max_iterations
   defp get_by_segments(config, ["effort"]), do: config.effort
   defp get_by_segments(config, ["thinking"]), do: config.thinking
+  defp get_by_segments(config, ["enableSubagents"]), do: config.enable_subagents
+  defp get_by_segments(config, ["ollamaNumCtx"]), do: config.ollama_num_ctx
   defp get_by_segments(config, ["mcpServers"]), do: config.mcp_servers
   defp get_by_segments(config, ["mcpServers", name]), do: Map.get(config.mcp_servers, name)
   defp get_by_segments(config, ["hooks"]), do: config.hooks
@@ -171,6 +181,8 @@ defmodule Viber.Runtime.Config do
       max_iterations: parse_max_iterations(data["maxIterations"]),
       effort: parse_effort(data["effort"]),
       thinking: parse_thinking(data["thinking"]),
+      enable_subagents: parse_enable_subagents(data["enableSubagents"]),
+      ollama_num_ctx: parse_ollama_num_ctx(data["ollamaNumCtx"]),
       mcp_servers: parse_mcp_servers(data["mcpServers"] || %{}),
       hooks: parse_hooks(data["hooks"] || %{}),
       custom_instructions: data["customInstructions"],
@@ -234,4 +246,10 @@ defmodule Viber.Runtime.Config do
 
   defp parse_thinking(val) when val in @thinking_modes, do: val
   defp parse_thinking(_), do: nil
+
+  defp parse_enable_subagents(val) when is_boolean(val), do: val
+  defp parse_enable_subagents(_), do: nil
+
+  defp parse_ollama_num_ctx(val) when is_integer(val) and val > 0, do: val
+  defp parse_ollama_num_ctx(_), do: nil
 end

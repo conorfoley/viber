@@ -107,6 +107,7 @@ defmodule Viber.Runtime.Conversation do
     tool_defs =
       Registry.builtin_specs()
       |> filter_by_toolsets(effective_toolsets(ctx))
+      |> filter_disabled_subagents(ctx.config)
       |> Enum.map(&Spec.to_tool_definition/1)
 
     api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
@@ -219,7 +220,10 @@ defmodule Viber.Runtime.Conversation do
     event_handler = ctx.event_handler
     session_id = safe_session_id(ctx.session)
 
-    active_specs = Registry.builtin_specs() |> filter_by_toolsets(effective_toolsets(ctx))
+    active_specs =
+      Registry.builtin_specs()
+      |> filter_by_toolsets(effective_toolsets(ctx))
+      |> filter_disabled_subagents(ctx.config)
 
     specs_by_name =
       active_specs
@@ -426,7 +430,14 @@ defmodule Viber.Runtime.Conversation do
   defp run_decision({:run, id, "spawn_agent", input}, ctx, event_handler) do
     event_handler.(Event.new(:tool_use_start, %{name: "spawn_agent", id: id}))
 
-    case SubAgent.run(input, ctx) do
+    result =
+      if subagents_enabled?(ctx.config) do
+        SubAgent.run(input, ctx)
+      else
+        {:error, "Sub-agents are disabled by enableSubagents=false"}
+      end
+
+    case result do
       {:ok, %{text: text}} ->
         event_handler.(
           Event.new(:tool_result, %{name: "spawn_agent", id: id, output: text, is_error: false})
@@ -729,6 +740,17 @@ defmodule Viber.Runtime.Conversation do
     Enum.filter(specs, fn spec -> MapSet.member?(toolset_set, spec.toolset) end)
   end
 
+  defp filter_disabled_subagents(specs, config) do
+    if subagents_enabled?(config) do
+      specs
+    else
+      Enum.reject(specs, &(&1.name == "spawn_agent"))
+    end
+  end
+
+  defp subagents_enabled?(%{enable_subagents: false}), do: false
+  defp subagents_enabled?(_config), do: true
+
   defp effective_toolsets(%Context{enabled_toolsets: toolsets, browser_context: browser_ctx}) do
     auto_activate? =
       Application.get_env(:viber, :browser_toolset, [])
@@ -775,6 +797,9 @@ defmodule Viber.Runtime.Conversation do
       if is_binary(config.api_key) and config.api_key != "",
         do: [{:api_key, config.api_key} | opts],
         else: opts
+    end)
+    |> then(fn opts ->
+      if config.ollama_num_ctx, do: [{:num_ctx, config.ollama_num_ctx} | opts], else: opts
     end)
   end
 
