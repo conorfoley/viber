@@ -71,7 +71,7 @@ defmodule Viber.CLI.Init do
 
   defp write_settings(viber_dir, _stack) do
     settings = %{
-      "model" => "sonnet",
+      "model" => "ollama:qwen3.8:latest",
       "permissions" => %{"allow" => "workspace-write"}
     }
 

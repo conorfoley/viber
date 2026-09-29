@@ -57,7 +57,7 @@ defmodule Viber.CLI.Main do
 
     {:ok, config} = Config.load(config_opts(opts))
 
-    model = opts[:model] || config.model || "sonnet"
+    model = opts[:model] || config.model || "ollama:qwen3.8:latest"
     resolved_model = Client.resolve_model_alias(model)
     permission_mode = resolve_permission_mode(opts, config)
 
@@ -198,7 +198,7 @@ defmodule Viber.CLI.Main do
       (default)     Start interactive REPL
 
     Options:
-      -m, --model MODEL              Set the model (default: sonnet)
+      -m, --model MODEL              Set the model (default: ollama:qwen3.8:latest)
       -p, --permission-mode MODE     Set permission mode
       -c, --config PATH              Config file path
       -r, --resume SESSION_ID        Resume a previous session

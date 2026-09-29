@@ -5,6 +5,8 @@ defmodule Viber.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     maybe_add_file_logger()
@@ -64,14 +66,23 @@ defmodule Viber.Application do
   defp server_children do
     if Application.get_env(:viber, :start_server, false) do
       port = Application.get_env(:viber, :server_port, 4100)
-      [{Bandit, plug: Viber.Server.Router, port: port}]
+
+      case :gen_tcp.listen(port, [:binary, active: false, reuseaddr: true]) do
+        {:ok, listen} ->
+          :gen_tcp.close(listen)
+          [{Bandit, plug: Viber.Server.Router, port: port}]
+
+        {:error, _reason} ->
+          Logger.warning("Port #{port} is already in use — Viber HTTP server not started", [])
+          []
+      end
     else
       []
     end
   end
 
   defp maybe_add_file_logger do
-    if Mix.env() == :dev do
+    if System.get_env("MIX_ENV") == "dev" do
       :logger.update_handler_config(:default, :level, :warning)
 
       log_path = Path.join(File.cwd!(), "log/server.log")

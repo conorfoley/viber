@@ -46,7 +46,7 @@ defmodule Viber.Runtime.Compact do
   def compact(session, opts \\ []) do
     messages = Session.get_messages(session)
     preserve = Keyword.get(opts, :preserve_recent, @preserve_recent)
-    model = Keyword.get(opts, :model, "sonnet")
+    model = Keyword.get(opts, :model, "ollama:qwen3.8:latest")
 
     if length(messages) <= preserve do
       {:ok, 0}

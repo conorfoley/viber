@@ -196,7 +196,7 @@ defmodule Viber.Gateway.Router do
 
     opts = [
       id: session_id,
-      model: Application.get_env(:viber, :gateway_model, "sonnet"),
+      model: Application.get_env(:viber, :gateway_model, "ollama:qwen3.8:latest"),
       project_root: Application.get_env(:viber, :project_root),
       name: {:via, Registry, {Viber.SessionRegistry, session_id}}
     ]
@@ -243,7 +243,7 @@ defmodule Viber.Gateway.Router do
       Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
         Conversation.run(
           session: session_pid,
-          model: Application.get_env(:viber, :gateway_model, "sonnet"),
+          model: Application.get_env(:viber, :gateway_model, "ollama:qwen3.8:latest"),
           user_input: msg.text,
           event_handler: event_handler,
           permission_mode: Application.get_env(:viber, :gateway_permission_mode, :allow)

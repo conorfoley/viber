@@ -9,7 +9,7 @@ defmodule Viber.Server.SessionHandler do
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
   def create_session(params) do
     id = Integer.to_string(System.unique_integer([:monotonic, :positive]))
-    model = params["model"] || "sonnet"
+    model = params["model"] || "ollama:qwen3.8:latest"
     project_root = params["project_root"]
 
     opts = [
@@ -34,7 +34,7 @@ defmodule Viber.Server.SessionHandler do
     case Registry.lookup(Viber.SessionRegistry, session_id) do
       [{pid, _}] ->
         user_input = params["message"] || ""
-        model = params["model"] || "sonnet"
+        model = params["model"] || "ollama:qwen3.8:latest"
 
         browser_context = Viber.Runtime.BrowserContext.new(params["browser_context"])
 
