@@ -1,11 +1,16 @@
 defmodule Viber.Scheduler.Runner do
   @moduledoc """
   Executes scheduled jobs: runs stored queries/scripts, captures output, triggers alerts.
+
+  Concurrent jobs are bounded by the `:scheduler` pool of
+  `Viber.Runtime.Admission`; a job that finds the pool full is recorded as
+  `"skipped_busy"` and not run.
   """
 
   require Logger
 
   alias Viber.Database.ConnectionManager
+  alias Viber.Runtime.{Admission, Errors}
   alias Viber.Scheduler.{AlertSink, JobStore}
 
   @query_timeout 60_000
@@ -36,12 +41,24 @@ defmodule Viber.Scheduler.Runner do
   end
 
   defp execute_job(job) do
+    case Admission.run(:scheduler, fn -> {:ran, run_job(job)} end) do
+      {:ran, result} ->
+        result
+
+      {:error, :busy} ->
+        Logger.warning("Scheduled job #{job.name} (#{job.id}) skipped: scheduler pool busy")
+        JobStore.record_run(job.id, "skipped_busy", Errors.message(:busy))
+        {:error, Errors.message(:busy)}
+    end
+  end
+
+  defp run_job(job) do
     result =
       case job.type do
         "query" -> run_query(job)
         "script" -> run_script(job)
         "health_check" -> run_health_check(job)
-        _ -> {:error, "Unknown job type: #{job.type}"}
+        _ -> {:error, {:unknown_job_type, job.type}}
       end
 
     case result do
@@ -51,12 +68,31 @@ defmodule Viber.Scheduler.Runner do
         {:ok, output}
 
       {:error, reason} ->
-        error_msg = if is_binary(reason), do: reason, else: inspect(reason)
-        JobStore.record_run(job.id, "failure", error_msg)
+        error_msg = error_message(reason)
+        JobStore.record_run(job.id, run_status(reason), error_msg)
         maybe_alert_on_failure(job, error_msg)
         {:error, error_msg}
     end
   end
+
+  defp run_status({:timeout, _}), do: "unknown"
+  defp run_status({:connection_lost, _}), do: "unknown"
+  defp run_status(_), do: "failure"
+
+  defp error_message({:unknown_job_type, type}), do: "Unknown job type: #{type}"
+  defp error_message({:sql_error, msg}), do: "SQL error: #{msg}"
+  defp error_message({:exit_status, code, output}), do: "Exit code #{code}: #{output}"
+
+  defp error_message({:timeout, ms}),
+    do: "timed out after #{ms}ms; the job may have partially run"
+
+  defp error_message({:connection_lost, e}),
+    do: "connection lost mid-query; the job may have partially run: #{Errors.message(e)}"
+
+  defp error_message({:health_check_failed, reason}),
+    do: "Health check failed: #{error_message(reason)}"
+
+  defp error_message(reason), do: Errors.message(reason)
 
   defp run_query(job) do
     query = job.payload["query"] || ""
@@ -69,14 +105,20 @@ defmodule Viber.Scheduler.Runner do
             output = format_query_result(result)
             {:ok, output}
 
+          {:error, %DBConnection.ConnectionError{reason: :queue_timeout} = e} ->
+            {:error, e}
+
+          {:error, %DBConnection.ConnectionError{} = e} ->
+            {:error, {:connection_lost, e}}
+
           {:error, %{message: msg}} ->
-            {:error, "SQL error: #{msg}"}
+            {:error, {:sql_error, msg}}
 
           {:error, reason} ->
-            {:error, inspect(reason)}
+            {:error, reason}
         end
       rescue
-        e -> {:error, Exception.message(e)}
+        e -> {:error, e}
       end
     end
   end
@@ -85,15 +127,17 @@ defmodule Viber.Scheduler.Runner do
     script = job.payload["script"] || ""
     timeout = normalize_script_timeout(job.payload["timeout"])
 
-    case System.cmd("sh", ["-c", script],
-           stderr_to_stdout: true,
-           timeout: timeout
-         ) do
-      {output, 0} -> {:ok, output}
-      {output, code} -> {:error, "Exit code #{code}: #{output}"}
+    task =
+      Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
+        System.cmd("sh", ["-c", script], stderr_to_stdout: true)
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {output, 0}} -> {:ok, output}
+      {:ok, {output, code}} -> {:error, {:exit_status, code, output}}
+      {:exit, reason} -> {:error, {:exit, reason}}
+      nil -> {:error, {:timeout, timeout}}
     end
-  rescue
-    e -> {:error, Exception.message(e)}
   end
 
   defp run_health_check(job) do
@@ -109,14 +153,14 @@ defmodule Viber.Scheduler.Runner do
           {:ok, "Health check OK (#{elapsed}ms)"}
 
         {:error, %{message: msg}} ->
-          {:error, "Health check failed: #{msg}"}
+          {:error, {:health_check_failed, {:sql_error, msg}}}
 
         {:error, reason} ->
-          {:error, "Health check failed: #{inspect(reason)}"}
+          {:error, {:health_check_failed, reason}}
       end
     end
   rescue
-    e -> {:error, "Health check failed: #{Exception.message(e)}"}
+    e -> {:error, {:health_check_failed, e}}
   end
 
   defp resolve_repo(nil), do: ConnectionManager.get_active()

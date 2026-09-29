@@ -230,7 +230,8 @@ defmodule Viber.CLI.Repl do
            config: state.config,
            event_handler: event_handler,
            permission_mode: state.permission_mode,
-           project_root: state.project_root
+           project_root: state.project_root,
+           origin: :cli
          ) do
       {:ok, _result} ->
         if :atomics.get(spinner_active, 1) == 1 do

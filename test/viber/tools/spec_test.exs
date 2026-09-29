@@ -46,6 +46,39 @@ defmodule Viber.Tools.SpecTest do
     end
   end
 
+  describe "effect/2" do
+    test "read_only permission is a read, anything else a write" do
+      base = %Spec{name: "t", description: "t", input_schema: %{}, permission: :read_only}
+      assert Spec.effect(base, %{}) == :read
+      assert Spec.effect(%{base | permission: :workspace_write}, %{}) == :write
+    end
+
+    test "follows permission_fn" do
+      spec = %Spec{
+        name: "git",
+        description: "git",
+        input_schema: %{},
+        permission: :workspace_write,
+        permission_fn: &Viber.Tools.Builtins.Git.permission_for/1
+      }
+
+      assert Spec.effect(spec, %{"subcommand" => "log"}) == :read
+      assert Spec.effect(spec, %{"subcommand" => "push"}) == :write
+    end
+
+    test "effect_fn overrides the default" do
+      spec = %Spec{
+        name: "t",
+        description: "t",
+        input_schema: %{},
+        permission: :danger_full_access,
+        effect_fn: fn _ -> :read end
+      }
+
+      assert Spec.effect(spec, %{}) == :read
+    end
+  end
+
   describe "to_tool_definition/1" do
     test "converts spec to tool definition" do
       spec = %Spec{

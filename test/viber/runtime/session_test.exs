@@ -160,7 +160,7 @@ defmodule Viber.Runtime.SessionTest do
       assert assistant_msg.usage.output_tokens == 4
 
       assert tool_msg.role == :tool
-      assert [{:tool_result, "tool-1", "bash", "hi", false}] = tool_msg.blocks
+      assert [{:tool_result, "tool-1", "bash", "hi", false, :ok}] = tool_msg.blocks
 
       assert Usage.total_tokens(restored.cumulative_usage) == 17
     end

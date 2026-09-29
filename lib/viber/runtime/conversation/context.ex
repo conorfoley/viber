@@ -15,7 +15,9 @@ defmodule Viber.Runtime.Conversation.Context do
           interrupt: :atomics.atomics_ref() | nil,
           enabled_toolsets: [atom()] | nil,
           effort: String.t() | nil,
-          max_iterations: pos_integer()
+          max_iterations: pos_integer(),
+          terminal_tools: [Viber.Runtime.Signature.t()],
+          run_id: String.t() | nil
         }
 
   @enforce_keys [:session, :model, :event_handler]
@@ -28,11 +30,13 @@ defmodule Viber.Runtime.Conversation.Context do
     :interrupt,
     :enabled_toolsets,
     :effort,
+    :run_id,
     permission_mode: :prompt,
     project_root: ".",
     task_supervisor: Viber.TaskSupervisor,
     browser_context: nil,
     allowed_tools: MapSet.new(),
-    max_iterations: 25
+    max_iterations: 25,
+    terminal_tools: []
   ]
 end

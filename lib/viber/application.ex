@@ -19,6 +19,7 @@ defmodule Viber.Application do
           Viber.Runtime.Permissions.Broker,
           Viber.Runtime.BrowserAction.Broker,
           Viber.Server.Interrupts,
+          Viber.Runtime.Admission,
           {Registry, keys: :unique, name: Viber.SessionRegistry},
           {DynamicSupervisor, name: Viber.SessionSupervisor, strategy: :one_for_one},
           {Task.Supervisor, name: Viber.TaskSupervisor},

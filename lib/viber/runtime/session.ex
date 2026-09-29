@@ -13,7 +13,8 @@ defmodule Viber.Runtime.Session do
   @type content_block ::
           {:text, String.t()}
           | {:tool_use, String.t(), String.t(), String.t() | map()}
-          | {:tool_result, String.t(), String.t(), String.t(), boolean()}
+          | {:tool_result, String.t(), String.t(), String.t(), boolean(),
+             Viber.Tools.Result.outcome()}
 
   @type message :: %{
           role: message_role(),
@@ -201,6 +202,7 @@ defmodule Viber.Runtime.Session do
         state.cumulative_usage
       end
 
+    message = upgrade_message(message)
     state = %{state | messages: [message | state.messages], cumulative_usage: new_usage}
     {:reply, :ok, schedule_persist(state)}
   end
@@ -223,6 +225,7 @@ defmodule Viber.Runtime.Session do
 
   @impl true
   def handle_call({:replace_messages, messages}, _from, state) do
+    messages = Enum.map(messages, &upgrade_message/1)
     usage = recompute_usage(messages)
     state = %{state | messages: Enum.reverse(messages), cumulative_usage: usage}
     {:reply, :ok, schedule_persist(state)}
@@ -388,4 +391,9 @@ defmodule Viber.Runtime.Session do
       File.write(path, encoded)
     end
   end
+
+  defp upgrade_message(%{blocks: blocks} = message) when is_list(blocks),
+    do: %{message | blocks: Enum.map(blocks, &SessionStore.upgrade_block/1)}
+
+  defp upgrade_message(message), do: message
 end

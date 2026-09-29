@@ -32,12 +32,7 @@ defmodule Viber.API.Providers.Anthropic do
         {:error, exception} ->
           Logger.error("Anthropic send_message: HTTP error #{Exception.message(exception)}")
 
-          {:error,
-           %Error{
-             type: :http,
-             message: "http error: #{Exception.message(exception)}",
-             retryable: true
-           }}
+          {:error, Error.http_error(exception)}
       end
     end
   end
@@ -69,12 +64,7 @@ defmodule Viber.API.Providers.Anthropic do
         {:error, exception} ->
           Logger.error("Anthropic stream_message: HTTP error #{Exception.message(exception)}")
 
-          {:error,
-           %Error{
-             type: :http,
-             message: "http error: #{Exception.message(exception)}",
-             retryable: true
-           }}
+          {:error, Error.http_error(exception)}
       end
     end
   end

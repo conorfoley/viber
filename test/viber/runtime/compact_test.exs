@@ -46,4 +46,42 @@ defmodule Viber.Runtime.CompactTest do
     Session.add_message(session, %{role: :user, blocks: [{:text, "hello"}], usage: nil})
     assert {:ok, 0} = Compact.compact(session)
   end
+
+  test "compact summarizes through the summary signature" do
+    {:ok, session} = Session.start_link(id: "compact-5")
+
+    for i <- 1..6 do
+      Session.add_message(session, %{role: :user, blocks: [{:text, "message #{i}"}], usage: nil})
+    end
+
+    Viber.ScriptedProvider.script([
+      Viber.ScriptedProvider.response([
+        %{
+          "type" => "tool_use",
+          "id" => "t",
+          "name" => "submit_summary",
+          "input" => %{
+            "summary" => "Talked.",
+            "files" => ["lib/a.ex"],
+            "decisions" => [],
+            "open_tasks" => ["ship it"],
+            "errors" => []
+          }
+        }
+      ])
+    ])
+
+    assert {:ok, 2} =
+             Compact.compact(session,
+               preserve_recent: 4,
+               model: "gpt-4o",
+               provider_module: Viber.ScriptedProvider
+             )
+
+    [%{blocks: [{:text, text}]} | _] = Session.get_messages(session)
+    assert text =~ "Talked."
+    assert text =~ "## Files\n- lib/a.ex"
+    assert text =~ "## Open tasks\n- ship it"
+    refute text =~ "## Decisions"
+  end
 end

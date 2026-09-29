@@ -402,13 +402,7 @@ defmodule Viber.API.Providers.Ollama do
     end
   end
 
-  defp http_error(exception) do
-    %Error{
-      type: :http,
-      message: "http error: #{Exception.message(exception)}",
-      retryable: true
-    }
-  end
+  defp http_error(exception), do: Error.http_error(exception)
 
   defp build_req(%MessageRequest{} = request) do
     overrides = request.provider_overrides || %{}

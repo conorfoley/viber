@@ -1,14 +1,20 @@
 defmodule Viber.Tools.Builtins.Git do
   @moduledoc """
   Git operations within the current workspace.
+
+  A timed-out read-only subcommand is a plain error; any other timed-out
+  subcommand (push, commit, merge, …) is `:unknown` because it may have
+  been applied.
   """
+
+  alias Viber.Tools.Failure
 
   @default_timeout 60_000
   @max_output_bytes 100_000
 
   @read_only_subcommands ~w(status log diff show reflog shortlog describe rev-parse ls-files ls-tree blame)
 
-  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t() | Failure.t()}
   def execute(%{"subcommand" => subcommand} = input) do
     args = build_args(subcommand, input)
     timeout_ms = normalize_timeout(input["timeout"])
@@ -27,7 +33,9 @@ defmodule Viber.Tools.Builtins.Git do
 
       nil ->
         elapsed = System.monotonic_time(:millisecond) - start
-        {:ok, "Exit code: timeout\nExecution time: #{elapsed}ms\nGit command exceeded timeout"}
+        message = "Exit code: timeout\nExecution time: #{elapsed}ms\nGit command exceeded timeout"
+        outcome = if read_only?(subcommand), do: :error, else: :unknown
+        {:error, Failure.new(outcome, message, {:timeout, timeout_ms})}
     end
   end
 

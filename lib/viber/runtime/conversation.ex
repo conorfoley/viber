@@ -10,17 +10,20 @@ defmodule Viber.Runtime.Conversation do
   alias Viber.Runtime.{
     BrowserAction,
     Compact,
+    Emitter,
+    Errors,
     Event,
     Permissions,
     Prompt,
     Session,
+    Signature,
     SubAgent,
     Usage
   }
 
   alias Viber.Runtime.Permissions.Broker
   alias Viber.Runtime.Conversation.{Context, Request, StreamAccumulator}
-  alias Viber.Tools.{Executor, Registry, Spec}
+  alias Viber.Tools.{Executor, Registry, Result, Spec}
 
   @type event :: Event.t()
 
@@ -43,11 +46,18 @@ defmodule Viber.Runtime.Conversation do
         config_max_iterations(req.config) ||
         @default_max_iterations
 
+    emitter =
+      Emitter.new(req.event_handler,
+        run_id: req.run_id || Emitter.generate_run_id(),
+        session_id: safe_session_id(req.session)
+      )
+
     ctx = %Context{
       session: req.session,
       model: req.model,
       config: req.config,
-      event_handler: req.event_handler,
+      event_handler: Emitter.handler(emitter),
+      run_id: emitter.run_id,
       permission_mode: req.permission_mode,
       project_root: req.project_root,
       provider_module: req.provider_module,
@@ -55,8 +65,17 @@ defmodule Viber.Runtime.Conversation do
       interrupt: req.interrupt,
       enabled_toolsets: req.enabled_toolsets,
       effort: req.effort,
-      max_iterations: max_iter
+      max_iterations: max_iter,
+      terminal_tools: req.terminal_tools
     }
+
+    ctx.event_handler.(
+      Event.new(:run_started, %{
+        model: req.model,
+        origin: req.origin,
+        parent_run_id: req.parent_run_id
+      })
+    )
 
     user_input = req.user_input
     Logger.info("Conversation.run: model=#{ctx.model} input=#{String.slice(user_input, 0..80)}")
@@ -69,9 +88,17 @@ defmodule Viber.Runtime.Conversation do
 
   def run(opts) when is_list(opts) or is_map(opts), do: run(Request.new(opts))
 
-  defp turn_loop(%Context{event_handler: handler, max_iterations: max}, iteration)
+  defp turn_loop(%Context{event_handler: handler, max_iterations: max} = ctx, iteration)
        when iteration >= max do
-    handler.(Event.new(:error, %{message: "Maximum iterations (#{max}) exceeded"}))
+    finish_run(ctx, :max_iterations, :max_iterations, iteration)
+
+    handler.(
+      Event.new(:error, %{
+        message: "Maximum iterations (#{max}) exceeded",
+        reason: Errors.to_wire(:max_iterations)
+      })
+    )
+
     {:error, :max_iterations}
   end
 
@@ -79,6 +106,7 @@ defmodule Viber.Runtime.Conversation do
        when interrupt != nil do
     if :atomics.get(interrupt, 1) == 1 do
       Logger.info("Conversation: interrupted by user at iteration #{iteration}")
+      finish_run(ctx, :interrupted, nil, iteration)
       handler.(Event.new(:interrupted, %{message: "Interrupted"}))
       {:ok, :interrupted}
     else
@@ -109,6 +137,7 @@ defmodule Viber.Runtime.Conversation do
       |> filter_by_toolsets(effective_toolsets(ctx))
       |> filter_disabled_subagents(ctx.config)
       |> Enum.map(&Spec.to_tool_definition/1)
+      |> Kernel.++(Enum.map(ctx.terminal_tools, &Signature.tool_definition/1))
 
     api_messages = messages |> sanitize_messages() |> Enum.map(&to_api_message/1)
 
@@ -130,6 +159,15 @@ defmodule Viber.Runtime.Conversation do
       "Conversation turn_loop: iteration=#{iteration} messages=#{length(messages)} tools=#{length(tool_defs)}"
     )
 
+    ctx.event_handler.(
+      Event.new(:model_request, %{
+        iteration: iteration,
+        model: resolved_model,
+        message_count: length(api_messages),
+        tool_count: length(tool_defs)
+      })
+    )
+
     case do_stream(request, ctx) do
       {:ok, stream} ->
         Logger.debug("Conversation turn_loop: stream started, processing events")
@@ -139,7 +177,8 @@ defmodule Viber.Runtime.Conversation do
 
       {:error, err} ->
         Logger.error("Conversation turn_loop: stream error #{inspect(err)}")
-        ctx.event_handler.(Event.new(:error, %{message: inspect(err)}))
+        finish_run(ctx, :error, err, iteration + 1)
+        ctx.event_handler.(error_event(err))
         {:error, err}
     end
   end
@@ -152,9 +191,18 @@ defmodule Viber.Runtime.Conversation do
     provider_module.stream_message(request)
   end
 
-  defp handle_turn_result(%StreamAccumulator{stream_error: error}, _ctx, _iteration)
+  defp handle_turn_result(%StreamAccumulator{stream_error: error}, ctx, iteration)
        when not is_nil(error) do
     Logger.error("Conversation: aborting turn due to stream error: #{inspect(error)}")
+    finish_run(ctx, :error, {:stream_error, error}, iteration + 1)
+
+    ctx.event_handler.(
+      Event.new(:error, %{
+        message: "Stream interrupted: #{Errors.message(error)}",
+        reason: Errors.to_wire({:stream_error, error})
+      })
+    )
+
     {:error, {:stream_error, error}}
   end
 
@@ -167,6 +215,15 @@ defmodule Viber.Runtime.Conversation do
         nil -> %Usage{}
         api_usage -> Usage.from_api_usage(api_usage)
       end
+
+    ctx.event_handler.(
+      Event.new(:model_response, %{
+        iteration: iteration,
+        stop_reason: acc.stop_reason,
+        usage: usage,
+        tool_calls: length(tool_uses)
+      })
+    )
 
     assistant_blocks =
       acc.blocks
@@ -194,6 +251,7 @@ defmodule Viber.Runtime.Conversation do
 
     if tool_uses == [] do
       Logger.debug("Conversation: turn complete, no tool calls")
+      finish_run(ctx, :completed, nil, iteration + 1)
       ctx.event_handler.(Event.new(:turn_complete, %{usage: usage}))
       {:ok, %{text: text_content, usage: usage, iterations: iteration + 1}}
     else
@@ -201,18 +259,80 @@ defmodule Viber.Runtime.Conversation do
         "Conversation: executing #{length(tool_uses)} tool(s): #{Enum.map_join(tool_uses, ", ", fn {_id, name, _input} -> name end)}"
       )
 
-      {tool_results, ctx} = execute_tools(tool_uses, ctx)
+      {terminal_uses, regular_uses} = split_terminal_uses(tool_uses, ctx.terminal_tools)
+
+      {regular_results, ctx} =
+        if regular_uses == [], do: {[], ctx}, else: execute_tools(regular_uses, ctx)
+
+      {terminal_results, submitted} = submit_terminal_uses(terminal_uses, ctx)
+      tool_results = in_call_order(tool_uses, regular_results ++ terminal_results)
 
       tool_result_blocks =
-        Enum.map(tool_results, fn {id, name, output, is_error} ->
-          {:tool_result, id, name, output, is_error}
+        Enum.map(tool_results, fn {id, name, %Result{} = result} ->
+          {:tool_result, id, name, result.output, Result.error?(result), result.outcome}
         end)
 
       tool_msg = %{role: :user, blocks: tool_result_blocks, usage: nil}
       :ok = Session.add_message(ctx.session, tool_msg)
 
-      turn_loop(ctx, iteration + 1)
+      if submitted do
+        finish_run(ctx, :submitted, nil, iteration + 1)
+        ctx.event_handler.(Event.new(:turn_complete, %{usage: usage}))
+
+        {:ok,
+         %{text: text_content, usage: usage, iterations: iteration + 1, submitted: submitted}}
+      else
+        turn_loop(ctx, iteration + 1)
+      end
     end
+  end
+
+  defp finish_run(%Context{event_handler: handler}, reason, cause, iterations) do
+    handler.(
+      Event.new(:run_finished, %{
+        termination_reason: reason,
+        termination_cause: if(cause, do: Errors.to_wire(cause)),
+        iterations: iterations
+      })
+    )
+  end
+
+  defp split_terminal_uses(tool_uses, []), do: {[], tool_uses}
+
+  defp split_terminal_uses(tool_uses, terminal_tools) do
+    names = MapSet.new(terminal_tools, &Signature.tool_name/1)
+    Enum.split_with(tool_uses, fn {_id, name, _input} -> MapSet.member?(names, name) end)
+  end
+
+  defp submit_terminal_uses(terminal_uses, %Context{} = ctx) do
+    Enum.map_reduce(terminal_uses, nil, fn {id, name, input}, submitted ->
+      signature = Enum.find(ctx.terminal_tools, &(Signature.tool_name(&1) == name))
+      ctx.event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
+
+      {result, submitted} =
+        case {submitted, Signature.validate(signature, ensure_parsed_input(input))} do
+          {nil, {:ok, outputs}} ->
+            {Result.ok("Submitted."), %{signature.name => outputs}}
+
+          {_, {:ok, _}} ->
+            {Result.failure(:refused, "Already submitted; this call was ignored.", :duplicate),
+             submitted}
+
+          {_, {:error, error}} ->
+            {Result.failure(
+               :error,
+               "Submission rejected: #{error.message}. Call #{name} again.",
+               error
+             ), submitted}
+        end
+
+      {finish_tool(ctx.event_handler, id, name, result), submitted}
+    end)
+  end
+
+  defp in_call_order(tool_uses, results) do
+    by_id = Map.new(results, fn {id, _name, _result} = r -> {id, r} end)
+    Enum.map(tool_uses, fn {id, _name, _input} -> Map.fetch!(by_id, id) end)
   end
 
   defp execute_tools(tool_uses, %Context{} = ctx) do
@@ -252,7 +372,7 @@ defmodule Viber.Runtime.Conversation do
 
     results =
       if sequential_execution?(decisions, specs_by_name) do
-        Enum.map(decisions, &run_decision(&1, ctx, event_handler))
+        Enum.map(decisions, &safe_run_decision(&1, ctx, event_handler))
       else
         run_decisions_concurrently(decisions, ctx, event_handler)
       end
@@ -364,7 +484,7 @@ defmodule Viber.Runtime.Conversation do
     ctx.task_supervisor
     |> Task.Supervisor.async_stream_nolink(
       decisions,
-      &run_decision(&1, ctx, event_handler),
+      &safe_run_decision(&1, ctx, event_handler),
       ordered: true,
       timeout: 300_000,
       on_timeout: :kill_task
@@ -374,12 +494,48 @@ defmodule Viber.Runtime.Conversation do
       {{:ok, result}, _} ->
         result
 
-      {{:exit, reason}, {:run, id, name, _}} ->
-        {id, name, "Tool execution failed: #{inspect(reason)}", true}
-
-      {{:exit, reason}, {:denied, id, name, _}} ->
-        {id, name, "Tool execution failed: #{inspect(reason)}", true}
+      {{:exit, reason}, decision} ->
+        {id, name} = decision_id(decision)
+        result = Executor.crash_result(decision_effect(decision), {:exit, reason})
+        finish_tool(event_handler, id, name, result)
     end)
+  end
+
+  defp decision_id({:run, id, name, _input}), do: {id, name}
+  defp decision_id({:denied, id, name, _reason}), do: {id, name}
+
+  defp decision_effect({:run, _id, "spawn_agent", _input}), do: :write
+  defp decision_effect({:run, _id, name, input}), do: Executor.effect(name, input)
+  defp decision_effect({:denied, _id, _name, _reason}), do: :read
+
+  defp safe_run_decision(decision, ctx, event_handler) do
+    run_decision(decision, ctx, event_handler)
+  catch
+    kind, value ->
+      {id, name} = decision_id(decision)
+      reason = Errors.from_caught(kind, value, __STACKTRACE__)
+      Logger.error("Conversation: tool #{name} crashed: #{Errors.message(reason)}")
+
+      finish_tool(
+        event_handler,
+        id,
+        name,
+        Executor.crash_result(decision_effect(decision), reason)
+      )
+  end
+
+  defp finish_tool(event_handler, id, name, %Result{} = result) do
+    event_handler.(
+      Event.new(:tool_result, %{
+        name: name,
+        id: id,
+        output: result.output,
+        is_error: Result.error?(result),
+        outcome: result.outcome
+      })
+    )
+
+    {id, name, result}
   end
 
   defp run_decision({:run, id, name, input}, ctx, event_handler)
@@ -388,43 +544,32 @@ defmodule Viber.Runtime.Conversation do
     Logger.info("Conversation: browser tool start name=#{name} id=#{id}")
     event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
 
-    case BrowserAction.Broker.request(session_id, name, input, event_handler) do
-      {:ok, %{"output" => output, "is_error" => true}} ->
-        output = normalize_browser_error(output)
+    result =
+      case BrowserAction.Broker.request(session_id, name, input, event_handler) do
+        {:ok, %{"output" => output, "is_error" => true}} ->
+          output = normalize_browser_error(output)
 
-        Logger.info(
-          "Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
-        )
+          Logger.info(
+            "Conversation: browser tool error name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+          )
 
-        event_handler.(
-          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: true})
-        )
+          Result.failure(:error, output, :browser_error)
 
-        {id, name, output, true}
+        {:ok, %{"output" => output}} ->
+          Logger.info(
+            "Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
+          )
 
-      {:ok, %{"output" => output}} ->
-        Logger.info(
-          "Conversation: browser tool complete name=#{name} id=#{id} output_bytes=#{byte_size(output)}"
-        )
+          maybe_wait_for_tab_ready(name, session_id, id)
+          Result.ok(output)
 
-        maybe_wait_for_tab_ready(name, session_id, id)
+        {:error, :timeout} ->
+          msg = "Browser action '#{name}' timed out — is the extension connected?"
+          Logger.warning("Conversation: browser tool timeout name=#{name} id=#{id}")
+          browser_timeout_result(Executor.effect(name, input), msg)
+      end
 
-        event_handler.(
-          Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
-        )
-
-        {id, name, output, false}
-
-      {:error, :timeout} ->
-        msg = "Browser action '#{name}' timed out — is the extension connected?"
-        Logger.warning("Conversation: browser tool timeout name=#{name} id=#{id}")
-
-        event_handler.(
-          Event.new(:tool_result, %{name: name, id: id, output: msg, is_error: true})
-        )
-
-        {id, name, msg, true}
-    end
+    finish_tool(event_handler, id, name, result)
   end
 
   defp run_decision({:run, id, "spawn_agent", input}, ctx, event_handler) do
@@ -434,63 +579,48 @@ defmodule Viber.Runtime.Conversation do
       if subagents_enabled?(ctx.config) do
         SubAgent.run(input, ctx)
       else
-        {:error, "Sub-agents are disabled by enableSubagents=false"}
+        {:error, :subagents_disabled}
       end
 
-    case result do
-      {:ok, %{text: text}} ->
-        event_handler.(
-          Event.new(:tool_result, %{name: "spawn_agent", id: id, output: text, is_error: false})
-        )
-
-        {id, "spawn_agent", text, false}
-
-      {:error, reason} ->
-        msg = "Sub-agent failed: #{inspect(reason)}"
-
-        event_handler.(
-          Event.new(:tool_result, %{name: "spawn_agent", id: id, output: msg, is_error: true})
-        )
-
-        {id, "spawn_agent", msg, true}
-    end
+    finish_tool(event_handler, id, "spawn_agent", sub_agent_result(result))
   end
 
   defp run_decision({:run, id, name, input}, _ctx, event_handler) do
     event_handler.(Event.new(:tool_use_start, %{name: name, id: id}))
-
-    try do
-      case Executor.execute(name, input) do
-        {:ok, output} ->
-          event_handler.(
-            Event.new(:tool_result, %{name: name, id: id, output: output, is_error: false})
-          )
-
-          {id, name, output, false}
-
-        {:error, error} ->
-          event_handler.(
-            Event.new(:tool_result, %{name: name, id: id, output: error, is_error: true})
-          )
-
-          {id, name, error, true}
-      end
-    rescue
-      e ->
-        error = "Tool execution crashed: #{Exception.message(e)}"
-
-        event_handler.(
-          Event.new(:tool_result, %{name: name, id: id, output: error, is_error: true})
-        )
-
-        {id, name, error, true}
-    end
+    finish_tool(event_handler, id, name, Executor.run(name, input))
   end
 
   defp run_decision({:denied, id, name, reason}, _ctx, event_handler) do
-    event_handler.(Event.new(:tool_result, %{name: name, id: id, output: reason, is_error: true}))
+    finish_tool(event_handler, id, name, Result.failure(:refused, reason, :denied))
+  end
 
-    {id, name, reason, true}
+  defp browser_timeout_result(:write, msg), do: Result.failure(:unknown, msg, :timeout)
+  defp browser_timeout_result(:read, msg), do: Result.failure(:error, msg, :timeout)
+
+  defp sub_agent_result({:ok, %{text: text}}), do: Result.ok(text)
+
+  defp sub_agent_result({:error, :subagents_disabled}) do
+    Result.failure(
+      :refused,
+      "Sub-agents are disabled by enableSubagents=false",
+      :subagents_disabled
+    )
+  end
+
+  defp sub_agent_result({:error, :busy}) do
+    Result.failure(:refused, "Sub-agent refused: too many sub-agents running; retry later", :busy)
+  end
+
+  defp sub_agent_result({:error, {:not_started, reason}}) do
+    Result.failure(:not_sent, "Sub-agent could not start: #{Errors.message(reason)}", reason)
+  end
+
+  defp sub_agent_result({:error, reason}) do
+    Result.failure(
+      :unknown,
+      "Sub-agent failed: #{Errors.message(reason)}; it may have applied changes before failing",
+      reason
+    )
   end
 
   defp maybe_wait_for_tab_ready("browser_navigate", session_id, id) do
@@ -553,7 +683,7 @@ defmodule Viber.Runtime.Conversation do
 
   defp result_ids_for(%{blocks: next_blocks}) do
     Enum.flat_map(next_blocks, fn
-      {:tool_result, id, _name, _output, _err} -> [id]
+      {:tool_result, id, _name, _output, _err, _outcome} -> [id]
       _ -> []
     end)
   end
@@ -601,11 +731,13 @@ defmodule Viber.Runtime.Conversation do
     %{type: "tool_use", id: id, name: name, input: input}
   end
 
-  defp block_to_api_content({:tool_result, tool_use_id, _tool_name, output, is_error}) do
+  defp block_to_api_content({:tool_result, tool_use_id, _tool_name, output, is_error, outcome}) do
+    text = Result.model_output(%Result{output: output, outcome: outcome})
+
     result = %{
       type: "tool_result",
       tool_use_id: tool_use_id,
-      content: [%{type: "text", text: output}]
+      content: [%{type: "text", text: text}]
     }
 
     if is_error, do: Map.put(result, :is_error, true), else: result
@@ -677,9 +809,9 @@ defmodule Viber.Runtime.Conversation do
     acc
   end
 
-  defp process_event({:message_delta, _delta, usage}, acc, _handler) do
+  defp process_event({:message_delta, delta, usage}, acc, _handler) do
     Logger.debug("Stream event: message_delta")
-    %{acc | current_usage: usage}
+    %{acc | current_usage: usage, stop_reason: stop_reason(delta) || acc.stop_reason}
   end
 
   defp process_event(:message_stop, acc, _handler) do
@@ -687,22 +819,22 @@ defmodule Viber.Runtime.Conversation do
     acc
   end
 
-  defp process_event({:stream_error, e}, acc, handler) do
+  defp process_event({:stream_error, e}, acc, _handler) do
     Logger.error("Conversation: stream error received: #{inspect(e)}")
-
-    handler.(
-      Event.new(:error, %{
-        message:
-          "Stream interrupted: #{if is_exception(e), do: Exception.message(e), else: inspect(e)}"
-      })
-    )
-
     %{acc | stream_error: e}
   end
 
   defp process_event(other, acc, _handler) do
     Logger.debug("Stream event: unknown #{inspect(other)}")
     acc
+  end
+
+  defp stop_reason(%{"stop_reason" => reason}) when is_binary(reason), do: reason
+  defp stop_reason(%{stop_reason: reason}) when is_binary(reason), do: reason
+  defp stop_reason(_delta), do: nil
+
+  defp error_event(reason) do
+    Event.new(:error, %{message: Errors.message(reason), reason: Errors.to_wire(reason)})
   end
 
   defp extract_tool_uses(blocks) do
@@ -826,12 +958,14 @@ defmodule Viber.Runtime.Conversation do
 
   @auto_compact_threshold 80_000
 
-  defp maybe_auto_compact(%Context{session: session, model: model, event_handler: handler}) do
+  defp maybe_auto_compact(%Context{session: session, model: model, event_handler: handler} = ctx) do
     if Compact.should_compact?(session, token_threshold: @auto_compact_threshold) do
       Logger.info("Conversation: auto-compacting (token threshold exceeded)")
       handler.(Event.new(:info, %{message: "Auto-compacting conversation history..."}))
 
-      {:ok, removed} = Compact.compact(session, model: model)
+      {:ok, removed} =
+        Compact.compact(session, model: model, provider_module: ctx.provider_module)
+
       Logger.info("Conversation: auto-compacted #{removed} messages")
     end
   end

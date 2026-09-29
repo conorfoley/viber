@@ -5,23 +5,21 @@ defmodule Viber.Server.SSE do
   Consumes `%Viber.Runtime.Event{}` values and serializes them via
   `Viber.Runtime.Event.to_map/1` — the single source of truth for the wire
   protocol.
+
+  When the `:server` admission pool is full the request is answered with
+  `429 Too Many Requests` and a `Retry-After` header instead of a stream.
   """
 
   import Plug.Conn
 
   require Logger
 
-  alias Viber.Runtime.Event
+  alias Viber.Runtime.{Errors, Event}
+
+  @busy_retry_after 5
 
   @spec stream(Plug.Conn.t(), String.t(), map()) :: Plug.Conn.t()
   def stream(conn, session_id, params) do
-    conn =
-      conn
-      |> put_resp_header("content-type", "text/event-stream")
-      |> put_resp_header("cache-control", "no-cache")
-      |> put_resp_header("connection", "keep-alive")
-      |> send_chunked(200)
-
     caller = self()
 
     event_handler = fn event ->
@@ -33,12 +31,29 @@ defmodule Viber.Server.SSE do
       {:ok, task_pid} ->
         Logger.info("SSE: stream started session=#{session_id} task=#{inspect(task_pid)}")
         monitor_ref = Process.monitor(task_pid)
-        stream_loop(conn, session_id, monitor_ref)
+        stream_loop(start_chunked(conn), session_id, monitor_ref)
 
       {:error, :not_found} ->
+        conn = start_chunked(conn)
         send_sse_event(conn, Event.new(:error, %{message: "Session not found"}))
         conn
+
+      {:error, :busy} ->
+        Logger.warning("SSE: rejected session=#{session_id}: server pool busy")
+
+        conn
+        |> put_resp_content_type("application/json")
+        |> put_resp_header("retry-after", Integer.to_string(@busy_retry_after))
+        |> send_resp(429, Jason.encode!(%{error: Errors.message(:busy)}))
     end
+  end
+
+  defp start_chunked(conn) do
+    conn
+    |> put_resp_header("content-type", "text/event-stream")
+    |> put_resp_header("cache-control", "no-cache")
+    |> put_resp_header("connection", "keep-alive")
+    |> send_chunked(200)
   end
 
   defp stream_loop(conn, session_id, monitor_ref) do

@@ -1,6 +1,12 @@
 defmodule Viber.Runtime.SessionStore do
   @moduledoc """
   Ecto schema and persistence layer for conversation sessions.
+
+  Tool results are stored with their outcome
+  (`{:tool_result, id, name, output, is_error, outcome}`). Sessions written
+  before outcomes existed have no `"outcome"` key; `decode_message/1`
+  migrates them on load (`is_error` → `:error`, otherwise `:ok`) and the next
+  persist writes the new shape back.
   """
 
   use Ecto.Schema
@@ -9,6 +15,7 @@ defmodule Viber.Runtime.SessionStore do
 
   alias Viber.Repo
   alias Viber.Runtime.{Session, Usage}
+  alias Viber.Tools.Result
 
   @primary_key {:id, :string, autogenerate: false}
 
@@ -208,14 +215,27 @@ defmodule Viber.Runtime.SessionStore do
   defp encode_block({:tool_use, id, name, input}),
     do: %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
 
-  defp encode_block({:tool_result, tool_use_id, tool_name, output, is_error}),
+  defp encode_block({:tool_result, _, _, _, _} = legacy),
+    do: legacy |> upgrade_block() |> encode_block()
+
+  defp encode_block({:tool_result, tool_use_id, tool_name, output, is_error, outcome}),
     do: %{
       "type" => "tool_result",
       "tool_use_id" => tool_use_id,
       "tool_name" => tool_name,
       "output" => output,
-      "is_error" => is_error
+      "is_error" => is_error,
+      "outcome" => Atom.to_string(outcome)
     }
+
+  @spec upgrade_block(tuple()) :: Session.content_block() | tuple()
+  def upgrade_block({:tool_result, id, name, output, is_error}),
+    do: {:tool_result, id, name, output, is_error, legacy_outcome(is_error)}
+
+  def upgrade_block(block), do: block
+
+  defp legacy_outcome(true), do: :error
+  defp legacy_outcome(_), do: :ok
 
   defp decode_role("system"), do: :system
   defp decode_role("user"), do: :user
@@ -233,12 +253,16 @@ defmodule Viber.Runtime.SessionStore do
   defp decode_block(%{"type" => "tool_use", "id" => id, "name" => name, "input" => input}),
     do: {:tool_use, id, name, input}
 
-  defp decode_block(%{
-         "type" => "tool_result",
-         "tool_use_id" => tool_use_id,
-         "tool_name" => tool_name,
-         "output" => output,
-         "is_error" => is_error
-       }),
-       do: {:tool_result, tool_use_id, tool_name, output, is_error}
+  defp decode_block(
+         %{
+           "type" => "tool_result",
+           "tool_use_id" => tool_use_id,
+           "tool_name" => tool_name,
+           "output" => output,
+           "is_error" => is_error
+         } = json
+       ) do
+    outcome = Result.outcome_from_string(json["outcome"]) || legacy_outcome(is_error)
+    {:tool_result, tool_use_id, tool_name, output, is_error, outcome}
+  end
 end

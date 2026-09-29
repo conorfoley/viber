@@ -22,7 +22,7 @@ defmodule Viber.Gateway.Router do
   require Logger
 
   alias Viber.Gateway.Message
-  alias Viber.Runtime.{Conversation, Session}
+  alias Viber.Runtime.{Admission, Conversation, Errors, Session}
 
   @presence_table :viber_gateway_presence
 
@@ -108,9 +108,17 @@ defmodule Viber.Gateway.Router do
   @impl true
   def handle_cast({:inbound, %Message{} = msg}, state) do
     state = track_channel(state, msg.adapter_id, msg.channel_id)
-    session_pid = ensure_session(msg)
     adapter_entry = Map.get(state.adapters, msg.adapter_id)
-    dispatch_conversation(session_pid, msg, adapter_entry)
+
+    case ensure_session(msg) do
+      {:ok, session_pid} ->
+        dispatch_conversation(session_pid, msg, adapter_entry)
+
+      {:error, reason} ->
+        Logger.error("Gateway: could not start session: #{inspect(reason)}")
+        maybe_reply_error(adapter_entry, msg, reason)
+    end
+
     {:noreply, state}
   end
 
@@ -179,7 +187,7 @@ defmodule Viber.Gateway.Router do
     case :ets.lookup(@presence_table, presence_key) do
       [{^presence_key, session_id}] ->
         case Registry.lookup(Viber.SessionRegistry, session_id) do
-          [{pid, _}] -> pid
+          [{pid, _}] -> {:ok, pid}
           [] -> create_and_register_session(presence_key)
         end
 
@@ -201,30 +209,45 @@ defmodule Viber.Gateway.Router do
       name: {:via, Registry, {Viber.SessionRegistry, session_id}}
     ]
 
-    {:ok, pid} = DynamicSupervisor.start_child(Viber.SessionSupervisor, {Session, opts})
-    :ets.insert(@presence_table, {presence_key, session_id})
-
-    Logger.info("Gateway: created session #{session_id} for #{inspect(presence_key)}")
-
-    pid
+    with {:ok, pid} <- DynamicSupervisor.start_child(Viber.SessionSupervisor, {Session, opts}) do
+      :ets.insert(@presence_table, {presence_key, session_id})
+      Logger.info("Gateway: created session #{session_id} for #{inspect(presence_key)}")
+      {:ok, pid}
+    end
   end
 
   defp dispatch_conversation(session_pid, %Message{} = msg, adapter_entry) do
     Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
-      buffer = accumulate_response(session_pid, msg)
-
-      cond do
-        adapter_entry == nil ->
-          Logger.warning("Gateway: no adapter entry for #{msg.adapter_id}, dropping response")
-
-        buffer == "" ->
-          Logger.warning("Gateway: empty response for message #{msg.id}")
-          send_reply(adapter_entry, msg, "(no response)")
-
-        true ->
-          send_reply(adapter_entry, msg, buffer)
-      end
+      :gateway
+      |> Admission.run(fn -> {:ok, accumulate_response(session_pid, msg)} end)
+      |> handle_admitted(adapter_entry, msg)
     end)
+  end
+
+  defp handle_admitted({:ok, buffer}, adapter_entry, msg),
+    do: deliver_response(adapter_entry, msg, buffer)
+
+  defp handle_admitted({:error, :busy}, adapter_entry, msg) do
+    Logger.warning("Gateway: busy, rejecting message #{msg.id}")
+    maybe_reply_error(adapter_entry, msg, :busy)
+  end
+
+  defp deliver_response(nil, %Message{} = msg, _buffer) do
+    Logger.warning("Gateway: no adapter entry for #{msg.adapter_id}, dropping response")
+  end
+
+  defp deliver_response(adapter_entry, %Message{} = msg, "") do
+    Logger.warning("Gateway: empty response for message #{msg.id}")
+    send_reply(adapter_entry, msg, "(no response)")
+  end
+
+  defp deliver_response(adapter_entry, %Message{} = msg, buffer),
+    do: send_reply(adapter_entry, msg, buffer)
+
+  defp maybe_reply_error(nil, _msg, _reason), do: :ok
+
+  defp maybe_reply_error(adapter_entry, %Message{} = msg, reason) do
+    send_reply(adapter_entry, msg, "Error: " <> Errors.message(reason))
   end
 
   defp send_reply(%{module: mod, config: cfg}, %Message{} = msg, text) do
@@ -239,21 +262,26 @@ defmodule Viber.Gateway.Router do
       :ok
     end
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
-        Conversation.run(
-          session: session_pid,
-          model: Application.get_env(:viber, :gateway_model, "ollama:qwen3.8:latest"),
-          user_input: msg.text,
-          event_handler: event_handler,
-          permission_mode: Application.get_env(:viber, :gateway_permission_mode, :allow)
-        )
-      end)
+    case Task.Supervisor.start_child(Viber.TaskSupervisor, fn ->
+           Conversation.run(
+             session: session_pid,
+             model: Application.get_env(:viber, :gateway_model, "ollama:qwen3.8:latest"),
+             user_input: msg.text,
+             event_handler: event_handler,
+             permission_mode: Application.get_env(:viber, :gateway_permission_mode, :allow),
+             origin: :gateway
+           )
+         end) do
+      {:ok, task_pid} ->
+        monitor_ref = Process.monitor(task_pid)
+        chunks = collect_chunks(monitor_ref, [])
+        Process.demonitor(monitor_ref, [:flush])
+        IO.iodata_to_binary(chunks)
 
-    monitor_ref = Process.monitor(task_pid)
-    chunks = collect_chunks(monitor_ref, [])
-    Process.demonitor(monitor_ref, [:flush])
-    IO.iodata_to_binary(chunks)
+      {:error, reason} ->
+        Logger.error("Gateway: could not start conversation: #{inspect(reason)}")
+        "Error: " <> Errors.message(reason)
+    end
   end
 
   defp collect_chunks(monitor_ref, acc) do

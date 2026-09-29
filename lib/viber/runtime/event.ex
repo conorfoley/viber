@@ -12,14 +12,26 @@ defmodule Viber.Runtime.Event do
   * `:text_delta` — `%{text: String.t()}`
   * `:thinking_delta` — `%{text: String.t()}`
   * `:tool_use_start` — `%{name: String.t(), id: String.t()}`
-  * `:tool_result` — `%{name: String.t(), id: String.t() | nil, output: String.t(), is_error: boolean()}`
+  * `:tool_result` — `%{name: String.t(), id: String.t() | nil, output: String.t(), is_error: boolean(), outcome: outcome()}`
+    where `outcome()` is `:ok | :error | :refused | :not_sent | :unknown` (see
+    `Viber.Tools.Result`); `:unknown` means the action may have been applied.
   * `:turn_complete` — `%{usage: usage_map()}`
-  * `:error` — `%{message: String.t()}`
+  * `:run_started` — `%{model: String.t(), origin: atom(), parent_run_id: String.t() | nil}`
+  * `:model_request` — `%{iteration: non_neg_integer(), model: String.t(), message_count: non_neg_integer(), tool_count: non_neg_integer()}`
+  * `:model_response` — `%{iteration: non_neg_integer(), stop_reason: String.t() | nil, usage: usage_map(), tool_calls: non_neg_integer()}`
+  * `:run_finished` — `%{termination_reason: :completed | :submitted | :max_iterations | :interrupted | :error, termination_cause: reason_map() | nil, iterations: non_neg_integer()}`.
+    Emitted exactly once per run, before the final `:turn_complete`, `:error`
+    or `:interrupted` event.
+  * `:error` — `%{message: String.t(), reason: reason_map() | nil}`
   * `:interrupted` — `%{message: String.t()}`
   * `:permission_request` — `%{request_id: String.t(), tool: String.t(), input: String.t()}` (reserved for M2)
   * `:permission_decision` — `%{request_id: String.t(), decision: :allow | :deny | :always_allow}` (reserved for M2)
   * `:message_added` — `%{role: String.t()}` (reserved for M4)
   * `:usage_updated` — `%{usage: usage_map()}` (reserved for M4)
+
+  `reason_map()` is `Viber.Runtime.Errors.to_wire/1`: at least `%{kind: String.t()}`,
+  plus provider details (`type`, `status`, `retryable`, `context_window_exceeded`)
+  for API errors.
 
   `usage_map()` is the map produced by `Viber.Runtime.Usage` flattened to
   `%{input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, turns, total_tokens}`.
@@ -31,16 +43,21 @@ defmodule Viber.Runtime.Event do
         "type" => "text_delta",
         "payload" => %{"text" => "hello"},
         "session_id" => "abc" | nil,
+        "run_id" => "run_..." | nil,
         "seq" => 42 | nil,
         "timestamp" => "2026-04-16T21:00:00.000Z" | nil
       }
+
+  Events emitted by `Viber.Runtime.Conversation` are stamped by
+  `Viber.Runtime.Emitter`: `run_id` identifies the run and `seq` increases by
+  one per event within it.
   """
 
   alias Viber.Runtime.Usage
 
   @wire_version 1
 
-  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result info browser_action browser_action_result)
+  @known_types ~w(text_delta thinking_delta tool_use_start tool_result turn_complete run_started model_request model_response run_finished error interrupted permission_request permission_decision message_added usage_updated model_changed session_cleared command_result info browser_action browser_action_result)
 
   @type type ::
           :text_delta
@@ -48,6 +65,10 @@ defmodule Viber.Runtime.Event do
           | :tool_use_start
           | :tool_result
           | :turn_complete
+          | :run_started
+          | :model_request
+          | :model_response
+          | :run_finished
           | :error
           | :interrupted
           | :permission_request
@@ -65,6 +86,7 @@ defmodule Viber.Runtime.Event do
           type: type(),
           payload: map(),
           session_id: String.t() | nil,
+          run_id: String.t() | nil,
           seq: non_neg_integer() | nil,
           timestamp: DateTime.t() | nil
         }
@@ -73,6 +95,7 @@ defmodule Viber.Runtime.Event do
   defstruct type: nil,
             payload: %{},
             session_id: nil,
+            run_id: nil,
             seq: nil,
             timestamp: nil
 
@@ -82,6 +105,7 @@ defmodule Viber.Runtime.Event do
       type: type,
       payload: payload,
       session_id: Keyword.get(opts, :session_id),
+      run_id: Keyword.get(opts, :run_id),
       seq: Keyword.get(opts, :seq),
       timestamp: Keyword.get(opts, :timestamp, DateTime.utc_now())
     }
@@ -97,6 +121,7 @@ defmodule Viber.Runtime.Event do
       "type" => Atom.to_string(event.type),
       "payload" => payload_to_wire(event.payload),
       "session_id" => event.session_id,
+      "run_id" => event.run_id,
       "seq" => event.seq,
       "timestamp" => encode_timestamp(event.timestamp)
     }
@@ -110,6 +135,7 @@ defmodule Viber.Runtime.Event do
          type: type,
          payload: atomize_payload(payload),
          session_id: Map.get(map, "session_id"),
+         run_id: Map.get(map, "run_id"),
          seq: Map.get(map, "seq"),
          timestamp: decode_timestamp(Map.get(map, "timestamp"))
        }}
@@ -190,6 +216,7 @@ defmodule Viber.Runtime.Event do
         "type" => "string (event type)",
         "payload" => "object (see types)",
         "session_id" => "string | null",
+        "run_id" => "string | null",
         "seq" => "integer | null",
         "timestamp" => "string (ISO8601) | null"
       },
@@ -201,10 +228,33 @@ defmodule Viber.Runtime.Event do
           "name" => "string",
           "id" => "string | null",
           "output" => "string",
-          "is_error" => "boolean"
+          "is_error" => "boolean",
+          "outcome" => "ok | error | refused | not_sent | unknown"
         },
         "turn_complete" => %{"usage" => "usage_map"},
-        "error" => %{"message" => "string"},
+        "run_started" => %{
+          "model" => "string",
+          "origin" => "string",
+          "parent_run_id" => "string | null"
+        },
+        "model_request" => %{
+          "iteration" => "integer",
+          "model" => "string",
+          "message_count" => "integer",
+          "tool_count" => "integer"
+        },
+        "model_response" => %{
+          "iteration" => "integer",
+          "stop_reason" => "string | null",
+          "usage" => "usage_map",
+          "tool_calls" => "integer"
+        },
+        "run_finished" => %{
+          "termination_reason" => "completed | submitted | max_iterations | interrupted | error",
+          "termination_cause" => "reason_map | null",
+          "iterations" => "integer"
+        },
+        "error" => %{"message" => "string", "reason" => "reason_map | null"},
         "interrupted" => %{"message" => "string"},
         "permission_request" => %{
           "request_id" => "string",
@@ -235,6 +285,14 @@ defmodule Viber.Runtime.Event do
           "output" => "string",
           "is_error" => "boolean"
         }
+      },
+      "reason_map" => %{
+        "kind" => "string",
+        "type" => "string (optional)",
+        "status" => "integer | null (optional)",
+        "retryable" => "boolean (optional)",
+        "context_window_exceeded" => "boolean (optional)",
+        "stream" => "boolean (optional)"
       },
       "usage_map" => %{
         "input_tokens" => "integer",

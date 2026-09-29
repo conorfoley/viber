@@ -83,12 +83,7 @@ defmodule Viber.API.Providers.OpenAICompat do
         err
 
       {:error, exception} ->
-        {:error,
-         %Error{
-           type: :http,
-           message: "http error: #{Exception.message(exception)}",
-           retryable: true
-         }}
+        {:error, Error.http_error(exception)}
     end
   end
 
@@ -116,12 +111,7 @@ defmodule Viber.API.Providers.OpenAICompat do
         err
 
       {:error, exception} ->
-        {:error,
-         %Error{
-           type: :http,
-           message: "http error: #{Exception.message(exception)}",
-           retryable: true
-         }}
+        {:error, Error.http_error(exception)}
     end
   end
 

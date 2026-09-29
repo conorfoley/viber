@@ -20,8 +20,10 @@ defmodule Viber.Tools.Builtins.GitTest do
     end
 
     test "returns timeout info when command exceeds timeout" do
-      assert {:ok, result} = Git.execute(%{"subcommand" => "status", "timeout" => 0})
-      assert result =~ "timeout"
+      assert {:error, %Viber.Tools.Failure{outcome: :error, message: message}} =
+               Git.execute(%{"subcommand" => "status", "timeout" => 0})
+
+      assert message =~ "timeout"
     end
   end
 

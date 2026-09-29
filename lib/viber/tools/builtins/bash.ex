@@ -1,12 +1,17 @@
 defmodule Viber.Tools.Builtins.Bash do
   @moduledoc """
   Bash command execution with timeout and output capture.
+
+  A command that exceeds its timeout returns a `:unknown` failure: the
+  process may still be running or may have partially applied its effects.
   """
+
+  alias Viber.Tools.Failure
 
   @default_timeout 240_000
   @max_output_bytes 100_000
 
-  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t() | Failure.t()}
   def execute(%{"command" => command} = input) do
     timeout_ms = normalize_timeout(input["timeout"])
     start = System.monotonic_time(:millisecond)
@@ -24,7 +29,9 @@ defmodule Viber.Tools.Builtins.Bash do
 
       nil ->
         elapsed = System.monotonic_time(:millisecond) - start
-        {:ok, format_result(:timeout, "", elapsed)}
+
+        {:error,
+         Failure.new(:unknown, format_result(:timeout, "", elapsed), {:timeout, timeout_ms})}
     end
   end
 
@@ -37,7 +44,8 @@ defmodule Viber.Tools.Builtins.Bash do
   defp truncate_output(output), do: output
 
   defp format_result(:timeout, _output, elapsed) do
-    "Exit code: timeout\nExecution time: #{elapsed}ms\nCommand exceeded timeout"
+    "Exit code: timeout\nExecution time: #{elapsed}ms\nCommand exceeded timeout; " <>
+      "it may still be running or may have partially completed"
   end
 
   defp format_result(exit_code, output, elapsed) do

@@ -125,7 +125,12 @@ defmodule Viber.Tools.MCP.ServerManager do
         Client.call_tool(pid, tool_name, input)
 
       [] ->
-        {:error, "MCP server '#{server_name}' is not running"}
+        {:error,
+         Viber.Tools.Failure.new(
+           :not_sent,
+           "MCP server '#{server_name}' is not running",
+           {:mcp_server_not_running, server_name}
+         )}
     end
   end
 end

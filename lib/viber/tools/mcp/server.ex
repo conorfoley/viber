@@ -30,6 +30,10 @@ defmodule Viber.Tools.MCP.Server do
           {:ok, term()} | {:error, term()}
   def request(server, method, params) do
     GenServer.call(server, {:request, method, params}, 30_000)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, {:noproc, _} -> {:error, :not_running}
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   @spec notify(pid() | GenServer.name(), String.t(), map()) :: :ok

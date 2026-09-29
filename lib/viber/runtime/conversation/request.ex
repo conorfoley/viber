@@ -6,6 +6,15 @@ defmodule Viber.Runtime.Conversation.Request do
   missing required fields (`:session`, `:model`, `:user_input`) at the
   boundary rather than deep in the conversation loop.
 
+  `terminal_tools` are `Viber.Runtime.Signature`s offered to the model as
+  `submit_<name>` tools. A valid call ends the run and its outputs are
+  returned under `:submitted`; an invalid one is sent back as a tool error.
+
+  `origin` names the frontend that started the run (`:cli`, `:server`,
+  `:gateway`, `:sub_agent`, ...) and `parent_run_id` links a sub-agent run
+  to its parent; both are reported in the `:run_started` event. `run_id` is
+  generated when not given.
+
   Construct via `new/1`, which accepts a keyword list or map and
   performs coercion (e.g. browser context normalisation). Required
   fields are enforced via `@enforce_keys`.
@@ -28,7 +37,11 @@ defmodule Viber.Runtime.Conversation.Request do
           interrupt: :atomics.atomics_ref() | nil,
           enabled_toolsets: [atom()] | nil,
           effort: String.t() | nil,
-          max_iterations: pos_integer() | nil
+          max_iterations: pos_integer() | nil,
+          terminal_tools: [Viber.Runtime.Signature.t()],
+          origin: atom(),
+          run_id: String.t() | nil,
+          parent_run_id: String.t() | nil
         }
 
   @enforce_keys [:session, :model, :user_input]
@@ -43,7 +56,11 @@ defmodule Viber.Runtime.Conversation.Request do
     :effort,
     :browser_context,
     :max_iterations,
+    :run_id,
+    :parent_run_id,
+    origin: :api,
     event_handler: &__MODULE__.__noop_handler__/1,
+    terminal_tools: [],
     permission_mode: :prompt,
     project_root: "."
   ]
@@ -83,7 +100,11 @@ defmodule Viber.Runtime.Conversation.Request do
       interrupt: Map.get(opts, :interrupt),
       enabled_toolsets: Map.get(opts, :enabled_toolsets),
       effort: Map.get(opts, :effort),
-      max_iterations: Map.get(opts, :max_iterations)
+      max_iterations: Map.get(opts, :max_iterations),
+      terminal_tools: Map.get(opts, :terminal_tools, []),
+      origin: Map.get(opts, :origin, :api),
+      run_id: Map.get(opts, :run_id),
+      parent_run_id: Map.get(opts, :parent_run_id)
     }
   end
 

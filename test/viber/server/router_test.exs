@@ -39,6 +39,34 @@ defmodule Viber.Server.RouterTest do
     assert conn.status == 404
   end
 
+  test "POST /sessions/:id/message returns 429 when the server pool is full" do
+    conn =
+      conn(:post, "/sessions", %{})
+      |> put_req_header("content-type", "application/json")
+      |> Router.call(@opts)
+
+    %{"id" => id} = Jason.decode!(conn.resp_body)
+    %{server: %{limit: limit, in_use: in_use}} = Viber.Runtime.Admission.stats()
+
+    holders =
+      for _ <- 1..(limit - in_use) do
+        pid = spawn(fn -> Process.sleep(:infinity) end)
+        :ok = Viber.Runtime.Admission.acquire(:server, holder: pid)
+        pid
+      end
+
+    on_exit(fn -> Enum.each(holders, &Process.exit(&1, :kill)) end)
+
+    conn =
+      conn(:post, "/sessions/#{id}/message", %{"message" => "hello"})
+      |> put_req_header("content-type", "application/json")
+      |> Router.call(@opts)
+
+    assert conn.status == 429
+    assert get_resp_header(conn, "retry-after") == ["5"]
+    assert %{"error" => "busy" <> _} = Jason.decode!(conn.resp_body)
+  end
+
   test "GET /sessions returns a list" do
     conn = conn(:get, "/sessions") |> Router.call(@opts)
     assert conn.status == 200

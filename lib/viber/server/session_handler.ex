@@ -3,7 +3,7 @@ defmodule Viber.Server.SessionHandler do
   Session lifecycle management for HTTP API.
   """
 
-  alias Viber.Runtime.{Config, Permissions, Session, SessionStore, Usage}
+  alias Viber.Runtime.{Admission, Config, Permissions, Session, SessionStore, Usage}
   alias Viber.Server.Interrupts
 
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
@@ -29,48 +29,62 @@ defmodule Viber.Server.SessionHandler do
   end
 
   @spec send_message(String.t(), map(), (Viber.Runtime.Conversation.event() -> :ok)) ::
-          {:ok, pid()} | {:error, term()}
+          {:ok, pid()} | {:error, :not_found | :busy}
   def send_message(session_id, params, event_handler) do
-    case Registry.lookup(Viber.SessionRegistry, session_id) do
-      [{pid, _}] ->
-        user_input = params["message"] || ""
-        model = params["model"] || "ollama:qwen3.8:latest"
-
-        browser_context = Viber.Runtime.BrowserContext.new(params["browser_context"])
-
-        permission_mode =
-          case params["permission_mode"] do
-            nil -> Application.get_env(:viber, :server_permission_mode, :prompt)
-            mode -> Permissions.mode_from_string(mode)
-          end
-
-        {:ok, config} = Config.load()
-
-        interrupt_ref = Interrupts.register(session_id)
-
-        task =
-          Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
-            try do
-              Viber.Runtime.Conversation.run(
-                session: pid,
-                model: model,
-                user_input: user_input,
-                event_handler: event_handler,
-                permission_mode: permission_mode,
-                browser_context: browser_context,
-                interrupt: interrupt_ref,
-                config: config
-              )
-            after
-              Interrupts.clear(session_id)
-            end
-          end)
-
-        {:ok, task.pid}
-
-      [] ->
-        {:error, :not_found}
+    with [{pid, _}] <- Registry.lookup(Viber.SessionRegistry, session_id),
+         :ok <- Admission.acquire(:server) do
+      admitted(fn -> start_conversation(session_id, pid, params, event_handler) end)
+    else
+      [] -> {:error, :not_found}
+      {:error, :busy} -> {:error, :busy}
     end
+  end
+
+  defp admitted(fun) do
+    fun.()
+  catch
+    kind, value ->
+      Admission.release(:server)
+      :erlang.raise(kind, value, __STACKTRACE__)
+  end
+
+  defp start_conversation(session_id, pid, params, event_handler) do
+    user_input = params["message"] || ""
+    model = params["model"] || "ollama:qwen3.8:latest"
+
+    browser_context = Viber.Runtime.BrowserContext.new(params["browser_context"])
+
+    permission_mode =
+      case params["permission_mode"] do
+        nil -> Application.get_env(:viber, :server_permission_mode, :prompt)
+        mode -> Permissions.mode_from_string(mode)
+      end
+
+    {:ok, config} = Config.load()
+
+    interrupt_ref = Interrupts.register(session_id)
+
+    task =
+      Task.Supervisor.async_nolink(Viber.TaskSupervisor, fn ->
+        try do
+          Viber.Runtime.Conversation.run(
+            session: pid,
+            model: model,
+            user_input: user_input,
+            event_handler: event_handler,
+            permission_mode: permission_mode,
+            browser_context: browser_context,
+            interrupt: interrupt_ref,
+            config: config,
+            origin: :server
+          )
+        after
+          Interrupts.clear(session_id)
+        end
+      end)
+
+    :ok = Admission.transfer(:server, task.pid)
+    {:ok, task.pid}
   end
 
   @spec get_session(String.t()) :: {:ok, pid()} | {:error, :not_found}
@@ -333,13 +347,14 @@ defmodule Viber.Server.SessionHandler do
   defp block_to_map({:tool_use, id, name, input}),
     do: %{type: "tool_use", id: id, name: name, input: input}
 
-  defp block_to_map({:tool_result, tool_use_id, name, output, is_error}),
+  defp block_to_map({:tool_result, tool_use_id, name, output, is_error, outcome}),
     do: %{
       type: "tool_result",
       tool_use_id: tool_use_id,
       name: name,
       output: output,
-      is_error: is_error
+      is_error: is_error,
+      outcome: Atom.to_string(outcome)
     }
 
   defp usage_map(%Usage{} = u), do: Viber.Runtime.Event.usage_to_map(u)

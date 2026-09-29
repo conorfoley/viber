@@ -189,7 +189,7 @@ defmodule Viber.Runtime.ConversationTest do
     assert Enum.any?(recorded, fn
              %Viber.Runtime.Event{
                type: :tool_result,
-               payload: %{name: "spawn_agent", is_error: true, output: output}
+               payload: %{name: "spawn_agent", is_error: true, outcome: :refused, output: output}
              } ->
                output =~ "disabled"
 
@@ -219,6 +219,10 @@ defmodule Viber.Runtime.ConversationTest do
 
     messages = Session.get_messages(session)
     assert length(messages) == 4
+
+    assert Enum.any?(messages, fn msg ->
+             match?([{:tool_result, _, _, _, false, :ok}], msg.blocks)
+           end)
   end
 
   defmodule StreamErrorDuringToolProvider do
@@ -313,12 +317,214 @@ defmodule Viber.Runtime.ConversationTest do
              match?(
                %Viber.Runtime.Event{
                  type: :tool_result,
-                 payload: %{name: "bash", is_error: true}
+                 payload: %{name: "bash", is_error: true, outcome: :refused}
                },
                e
              )
            end)
 
+    assert Enum.any?(Session.get_messages(session), fn msg ->
+             match?([{:tool_result, _, "bash", _, true, :refused}], msg.blocks)
+           end)
+
     :ets.delete(events)
+  end
+
+  describe "terminal tools" do
+    setup do
+      sig = Viber.Runtime.Signature.new!("-> answer: int", name: "answer")
+      {:ok, session} = Session.start_link(id: "conv-terminal-#{System.unique_integer()}")
+      events = :ets.new(:terminal_events, [:bag, :public])
+
+      run = fn ->
+        Conversation.run(
+          session: session,
+          model: "test",
+          user_input: "answer",
+          provider_module: Viber.ScriptedProvider,
+          event_handler: fn e -> :ets.insert(events, {System.monotonic_time(), e}) end,
+          project_root: System.tmp_dir!(),
+          permission_mode: :allow,
+          terminal_tools: [sig]
+        )
+      end
+
+      {:ok, run: run, session: session, events: events}
+    end
+
+    test "a valid submission ends the run with its outputs", %{run: run, session: session} do
+      Viber.ScriptedProvider.script_stream([
+        [{:text, "ok"}, {:tool, "s1", "submit_answer", %{"answer" => 42}}]
+      ])
+
+      assert {:ok, %{text: "ok", iterations: 1, submitted: %{"answer" => %{"answer" => 42}}}} =
+               run.()
+
+      [request] = Viber.ScriptedProvider.requests()
+      assert "submit_answer" in Enum.map(request.tools, & &1.name)
+
+      assert [_, _, %{blocks: [{:tool_result, "s1", "submit_answer", "Submitted.", false, :ok}]}] =
+               Session.get_messages(session)
+    end
+
+    test "an invalid submission is returned as a tool error and the loop continues", %{
+      run: run,
+      events: events
+    } do
+      Viber.ScriptedProvider.script_stream([
+        [{:tool, "s1", "submit_answer", %{"answer" => "many"}}],
+        [{:tool, "s2", "submit_answer", %{"answer" => 7}}]
+      ])
+
+      assert {:ok, %{iterations: 2, submitted: %{"answer" => %{"answer" => 7}}}} = run.()
+
+      recorded = :ets.tab2list(events) |> Enum.map(fn {_, e} -> e end)
+
+      assert Enum.any?(recorded, fn
+               %Viber.Runtime.Event{
+                 type: :tool_result,
+                 payload: %{id: "s1", outcome: :error, output: output}
+               } ->
+                 output =~ "answer must be an integer"
+
+               _ ->
+                 false
+             end)
+    end
+
+    test "regular tools in the same turn still run, in call order", %{
+      run: run,
+      session: session
+    } do
+      Viber.ScriptedProvider.script_stream([
+        [
+          {:tool, "b1", "bash", %{"command" => "echo side"}},
+          {:tool, "s1", "submit_answer", %{"answer" => 1}}
+        ]
+      ])
+
+      assert {:ok, %{submitted: %{"answer" => %{"answer" => 1}}}} = run.()
+
+      [_, _, %{blocks: blocks}] = Session.get_messages(session)
+
+      assert [{:tool_result, "b1", "bash", out, false, :ok}, {:tool_result, "s1", _, _, _, :ok}] =
+               blocks
+
+      assert out =~ "side"
+    end
+
+    test "without a submission the run ends normally", %{run: run} do
+      Viber.ScriptedProvider.script_stream([[{:text, "no tool"}]])
+      assert {:ok, result} = run.()
+      refute Map.has_key?(result, :submitted)
+    end
+  end
+
+  describe "run events" do
+    setup do
+      {:ok, session} = Session.start_link(id: "conv-run-events-#{System.unique_integer()}")
+      parent = self()
+
+      run = fn opts ->
+        Conversation.run(
+          Keyword.merge(
+            [
+              session: session,
+              model: "test",
+              user_input: "hi",
+              provider_module: Viber.ScriptedProvider,
+              event_handler: fn e -> send(parent, {:run_event, e}) end,
+              project_root: System.tmp_dir!(),
+              permission_mode: :allow,
+              origin: :server
+            ],
+            opts
+          )
+        )
+      end
+
+      {:ok, run: run}
+    end
+
+    defp drain_events(acc \\ []) do
+      receive do
+        {:run_event, e} -> drain_events([e | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    test "a completed run is framed by run_started and run_finished", %{run: run} do
+      Viber.ScriptedProvider.script_stream([
+        [{:tool, "b1", "bash", %{"command" => "echo hi"}}],
+        [{:text, "done"}]
+      ])
+
+      assert {:ok, %{iterations: 2}} = run.([])
+      events = drain_events()
+      types = Enum.map(events, & &1.type)
+
+      assert hd(types) == :run_started
+      assert Enum.take(types, -2) == [:run_finished, :turn_complete]
+      assert Enum.count(types, &(&1 == :model_request)) == 2
+      assert Enum.count(types, &(&1 == :model_response)) == 2
+
+      [%{run_id: run_id} | _] = events
+      assert "run_" <> _ = run_id
+      assert Enum.all?(events, &(&1.run_id == run_id))
+      assert Enum.map(events, & &1.seq) == Enum.to_list(1..length(events))
+
+      assert %{payload: %{origin: :server, model: "test", parent_run_id: nil}} = hd(events)
+
+      assert [%{payload: %{stop_reason: "end_turn", tool_calls: 1, iteration: 0}}, _] =
+               Enum.filter(events, &(&1.type == :model_response))
+
+      assert %{payload: %{termination_reason: :completed, termination_cause: nil, iterations: 2}} =
+               Enum.find(events, &(&1.type == :run_finished))
+    end
+
+    test "a provider error finishes the run before the error event", %{run: run} do
+      Viber.ScriptedProvider.script_stream([])
+
+      assert {:error, _} = run.([])
+      events = drain_events()
+      assert Enum.take(Enum.map(events, & &1.type), -2) == [:run_finished, :error]
+
+      assert %{payload: %{termination_reason: :error, termination_cause: %{kind: "api_error"}}} =
+               Enum.find(events, &(&1.type == :run_finished))
+    end
+
+    test "max iterations is reported as the termination reason", %{run: run} do
+      Viber.ScriptedProvider.script_stream([[{:tool, "b1", "bash", %{"command" => "true"}}]])
+
+      assert {:error, :max_iterations} = run.(max_iterations: 1)
+      events = drain_events()
+      assert Enum.take(Enum.map(events, & &1.type), -2) == [:run_finished, :error]
+
+      assert %{payload: %{termination_reason: :max_iterations, iterations: 1}} =
+               Enum.find(events, &(&1.type == :run_finished))
+    end
+
+    test "a terminal submission finishes with :submitted", %{run: run} do
+      sig = Viber.Runtime.Signature.new!("-> answer: int", name: "answer")
+
+      Viber.ScriptedProvider.script_stream([
+        [{:tool, "s1", "submit_answer", %{"answer" => 1}}]
+      ])
+
+      assert {:ok, %{submitted: _}} = run.(terminal_tools: [sig])
+
+      assert %{payload: %{termination_reason: :submitted}} =
+               Enum.find(drain_events(), &(&1.type == :run_finished))
+    end
+
+    test "the given run_id and parent_run_id are used", %{run: run} do
+      Viber.ScriptedProvider.script_stream([[{:text, "ok"}]])
+      assert {:ok, _} = run.(run_id: "run_fixed", parent_run_id: "run_parent")
+
+      [first | _] = events = drain_events()
+      assert Enum.all?(events, &(&1.run_id == "run_fixed"))
+      assert first.payload.parent_run_id == "run_parent"
+    end
   end
 end

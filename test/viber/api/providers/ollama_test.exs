@@ -167,7 +167,9 @@ defmodule Viber.API.Providers.OllamaTest do
       events =
         Ollama.stream_events_from_chunks(
           "llama3",
-          [%{"error" => "no user query found in messages"}], num_ctx: 4096)
+          [%{"error" => "no user query found in messages"}],
+          num_ctx: 4096
+        )
 
       assert Enum.any?(events, fn
                {:stream_error, message} -> message =~ "ollamaNumCtx" and message =~ "4096"

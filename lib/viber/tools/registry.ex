@@ -702,8 +702,8 @@ defmodule Viber.Tools.Registry do
       Use role "worker" (default) to delegate independent work streams
       (e.g. run tests while editing code), and role "reviewer" to get an
       independent, skeptical verdict on completed work: the reviewer gathers
-      its own evidence and ends with "VERDICT: passed" or "VERDICT: failed",
-      which may contradict the worker's own claims.
+      its own evidence and returns "VERDICT: passed" or "VERDICT: failed"
+      with its justification, which may contradict the worker's own claims.
       Use effort "low" for simple scouting or mechanical subtasks and higher
       levels only for hard reasoning.
       """,

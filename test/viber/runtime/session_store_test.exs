@@ -106,6 +106,54 @@ defmodule Viber.Runtime.SessionStoreTest do
       assert [{:tool_result, "t1", "bash", "output here", false}] = decoded.blocks
     end
 
+    test "SessionStore round-trips tool_result outcomes" do
+      msg = %{
+        role: :user,
+        blocks: [{:tool_result, "t1", "bash", "timed out", true, :unknown}],
+        usage: nil
+      }
+
+      encoded = Viber.Runtime.SessionStore.encode_message(msg)
+      assert [%{"outcome" => "unknown"}] = encoded["blocks"]
+
+      decoded = Viber.Runtime.SessionStore.decode_message(encoded)
+      assert [{:tool_result, "t1", "bash", "timed out", true, :unknown}] = decoded.blocks
+    end
+
+    test "SessionStore migrates legacy tool_result blocks without outcome" do
+      legacy = %{
+        "role" => "user",
+        "blocks" => [
+          %{
+            "type" => "tool_result",
+            "tool_use_id" => "a",
+            "tool_name" => "bash",
+            "output" => "ok",
+            "is_error" => false
+          },
+          %{
+            "type" => "tool_result",
+            "tool_use_id" => "b",
+            "tool_name" => "bash",
+            "output" => "bad",
+            "is_error" => true
+          }
+        ]
+      }
+
+      decoded = Viber.Runtime.SessionStore.decode_message(legacy)
+
+      assert [
+               {:tool_result, "a", "bash", "ok", false, :ok},
+               {:tool_result, "b", "bash", "bad", true, :error}
+             ] = decoded.blocks
+    end
+
+    test "SessionStore upgrades legacy 5-tuples when encoding" do
+      msg = %{role: :user, blocks: [{:tool_result, "t", "bash", "x", true}], usage: nil}
+      assert [%{"outcome" => "error"}] = Viber.Runtime.SessionStore.encode_message(msg)["blocks"]
+    end
+
     test "usage encode/decode round-trip" do
       usage = %Usage{
         input_tokens: 100,

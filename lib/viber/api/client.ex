@@ -283,8 +283,19 @@ defmodule Viber.API.Client do
       end)
 
     case Task.yield(task, timeout) || Task.shutdown(task) do
-      {:ok, result} -> result
-      nil -> {:error, %Error{type: :http, message: "retry timed out", retryable: false}}
+      {:ok, result} ->
+        result
+
+      {:exit, reason} ->
+        {:error,
+         %Error{
+           type: :http,
+           message: "request process exited: #{inspect(reason)}",
+           cause: {:exit, reason}
+         }}
+
+      nil ->
+        {:error, %Error{type: :http, message: "retry timed out", cause: {:timeout, timeout}}}
     end
   end
 
@@ -294,15 +305,23 @@ defmodule Viber.API.Client do
         success
 
       {:error, %Error{} = err} ->
-        if Error.retryable?(err) and attempt < max_attempts - 1 do
-          Logger.debug(
-            "Retrying request (attempt #{attempt + 1}/#{max_attempts}) after #{backoff(attempt)}ms"
-          )
+        cond do
+          not Error.retryable?(err) ->
+            {:error, err}
 
-          Process.sleep(backoff(attempt))
-          do_send_with_retry(module, request, attempt + 1, max_attempts)
-        else
-          {:error, err}
+          attempt < max_attempts - 1 ->
+            Logger.debug(
+              "Retrying request (attempt #{attempt + 1}/#{max_attempts}) after #{backoff(attempt)}ms"
+            )
+
+            Process.sleep(backoff(attempt))
+            do_send_with_retry(module, request, attempt + 1, max_attempts)
+
+          max_attempts > 1 ->
+            {:error, Error.retries_exhausted(max_attempts, err)}
+
+          true ->
+            {:error, err}
         end
     end
   end

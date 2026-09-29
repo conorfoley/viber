@@ -1,24 +1,31 @@
 defmodule Viber.Runtime.Compact do
   @moduledoc """
   Conversation history compaction via LLM summarization.
+
+  The summary is a typed model call (`Viber.Runtime.Predict`) against
+  `summary_signature/0`, so it always carries the same sections: summary,
+  files, decisions, open tasks and errors. If the call fails, the old
+  messages are kept as plain text instead.
   """
 
   require Logger
 
-  alias Viber.API.{Client, MessageRequest}
-  alias Viber.Runtime.{Session, Usage}
+  alias Viber.Runtime.{Predict, Session, Signature, Usage}
 
   @chars_per_token 4
   @default_token_threshold 100_000
   @preserve_recent 4
 
-  @summary_prompt """
-  Summarize the conversation above into a concise but thorough reference document.
-  Preserve: all file paths mentioned, key decisions made, tool calls and their outcomes,
-  code changes applied, errors encountered, and any unresolved tasks.
-  Omit: verbatim code blocks (reference by file path instead), redundant greetings,
-  and tool call input/output that is no longer relevant.
-  Format as a structured summary with sections. Be concise but do not lose important context.
+  @summary_spec "conversation -> summary, files: list[string], decisions: list[string], open_tasks: list[string], errors: list[string]"
+
+  @summary_instructions """
+  Summarize the conversation into a concise but thorough reference.
+  summary: what happened, in a few short paragraphs; reference code by file path instead of quoting it.
+  files: every file path mentioned.
+  decisions: key decisions made and changes applied.
+  open_tasks: unresolved tasks and next steps.
+  errors: errors encountered and tool calls whose outcome was not ok.
+  Omit greetings and tool output that is no longer relevant.
   """
 
   @spec should_compact?(GenServer.server(), keyword()) :: boolean()
@@ -47,15 +54,16 @@ defmodule Viber.Runtime.Compact do
     messages = Session.get_messages(session)
     preserve = Keyword.get(opts, :preserve_recent, @preserve_recent)
     model = Keyword.get(opts, :model, "ollama:qwen3.8:latest")
+    predict_opts = [model: model, provider_module: Keyword.get(opts, :provider_module)]
 
     if length(messages) <= preserve do
       {:ok, 0}
     else
-      do_compact(session, messages, preserve, model)
+      do_compact(session, messages, preserve, predict_opts)
     end
   end
 
-  defp do_compact(session, messages, preserve, model) do
+  defp do_compact(session, messages, preserve, predict_opts) do
     {old_messages, recent} = Enum.split(messages, length(messages) - preserve)
 
     old_usage =
@@ -63,7 +71,7 @@ defmodule Viber.Runtime.Compact do
         if msg[:usage], do: Usage.add(acc, msg.usage), else: acc
       end)
 
-    summary_text = build_summary_text(old_messages, model)
+    summary_text = build_summary_text(old_messages, predict_opts)
 
     summary_msg = %{
       role: :assistant,
@@ -76,8 +84,8 @@ defmodule Viber.Runtime.Compact do
     {:ok, length(old_messages)}
   end
 
-  defp build_summary_text(old_messages, model) do
-    case build_summary(old_messages, model) do
+  defp build_summary_text(old_messages, predict_opts) do
+    case build_summary(old_messages, predict_opts) do
       {:ok, summary_text} ->
         summary_text
 
@@ -90,35 +98,40 @@ defmodule Viber.Runtime.Compact do
     end
   end
 
-  defp build_summary(messages, model) do
-    conversation_text = format_messages_for_summary(messages)
+  defp build_summary(messages, predict_opts) do
+    inputs = %{"conversation" => format_messages_for_summary(messages)}
 
-    request = %MessageRequest{
-      model: Client.resolve_model_alias(model),
-      max_tokens: 4_096,
-      messages: [
-        %Viber.API.InputMessage{
-          role: "user",
-          content: [%{type: "text", text: conversation_text <> "\n\n" <> @summary_prompt}]
-        }
-      ],
-      system: "You are a conversation summarizer. Produce a concise structured summary.",
-      tools: [],
-      stream: false
-    }
+    opts =
+      predict_opts
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Keyword.put(:system, "You are a conversation summarizer.")
 
-    case Client.send_message(model, request) do
-      {:ok, response} ->
-        text =
-          response.content
-          |> Enum.filter(fn c -> c["type"] == "text" || Map.get(c, :type) == "text" end)
-          |> Enum.map_join("\n", fn c -> c["text"] || Map.get(c, :text, "") end)
-
-        {:ok, "[Conversation summary]\n#{text}\n[End of summary - recent messages follow]"}
-
-      {:error, _} = err ->
-        err
+    with {:ok, outputs} <- Predict.call(summary_signature(), inputs, opts) do
+      {:ok, render_summary(outputs)}
     end
+  end
+
+  @spec summary_signature() :: Signature.t()
+  def summary_signature do
+    Signature.new!(@summary_spec, name: "summary", instructions: @summary_instructions)
+  end
+
+  @spec render_summary(map()) :: String.t()
+  def render_summary(outputs) do
+    sections =
+      [
+        {"Files", outputs["files"]},
+        {"Decisions", outputs["decisions"]},
+        {"Open tasks", outputs["open_tasks"]},
+        {"Errors", outputs["errors"]}
+      ]
+      |> Enum.reject(fn {_title, items} -> items in [nil, []] end)
+      |> Enum.map_join("\n\n", fn {title, items} ->
+        "## #{title}\n" <> Enum.map_join(items, "\n", &("- " <> &1))
+      end)
+
+    body = [outputs["summary"], sections] |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join("\n\n")
+    "[Conversation summary]\n#{body}\n[End of summary - recent messages follow]"
   end
 
   defp format_messages_for_summary(messages) do
@@ -143,14 +156,17 @@ defmodule Viber.Runtime.Compact do
   defp block_chars({:tool_use, _, _, input}) when is_map(input),
     do: input |> Jason.encode!() |> byte_size() |> Kernel.+(20)
 
-  defp block_chars({:tool_result, _, _, output, _}), do: String.length(output) + 20
+  defp block_chars({:tool_result, _, _, output, _, _}), do: String.length(output) + 20
   defp block_chars(_), do: 0
 
   defp block_text({:text, text}), do: text
   defp block_text({:tool_use, _id, name, _input}), do: "[used tool: #{name}]"
 
-  defp block_text({:tool_result, _id, name, output, _err}),
+  defp block_text({:tool_result, _id, name, output, _err, :ok}),
     do: "[#{name} result: #{String.slice(output, 0, 200)}]"
+
+  defp block_text({:tool_result, _id, name, output, _err, outcome}),
+    do: "[#{name} #{outcome}: #{String.slice(output, 0, 200)}]"
 
   defp block_text(_), do: ""
 end

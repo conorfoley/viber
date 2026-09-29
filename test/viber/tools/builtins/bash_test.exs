@@ -22,4 +22,11 @@ defmodule Viber.Tools.Builtins.BashTest do
   test "missing command returns error" do
     assert {:error, _} = Bash.execute(%{})
   end
+
+  test "timeout is an :unknown failure" do
+    assert {:error, %Viber.Tools.Failure{outcome: :unknown, reason: {:timeout, 1_000}} = f} =
+             Bash.execute(%{"command" => "sleep 5", "timeout" => 1})
+
+    assert f.message =~ "Exit code: timeout"
+  end
 end

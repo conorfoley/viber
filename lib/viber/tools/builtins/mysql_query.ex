@@ -1,9 +1,15 @@
 defmodule Viber.Tools.Builtins.MysqlQuery do
   @moduledoc """
   Execute SQL queries against a managed database connection with safety guardrails.
+
+  A write whose connection is lost mid-query (including a client timeout) is
+  `:unknown`: the statement may have committed. Queries against a read-only
+  connection that would write are `:refused`.
   """
 
   alias Viber.Database.{AuditLogger, ConnectionManager}
+  alias Viber.Runtime.Errors
+  alias Viber.Tools.Failure
 
   @default_timeout 30_000
   @default_limit 100
@@ -13,7 +19,7 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
   @write_prefixes ~w(INSERT UPDATE DELETE REPLACE)
   @ddl_prefixes ~w(DROP ALTER TRUNCATE CREATE RENAME)
 
-  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec execute(map()) :: {:ok, String.t()} | {:error, String.t() | Failure.t()}
   def execute(%{"query" => query} = input) do
     format = input["format"] || "table"
     timeout = normalize_timeout(input["timeout"])
@@ -72,7 +78,11 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
   defp check_read_only(conn_name, query) do
     if ConnectionManager.read_only?(conn_name) && classify_query(query) != :read_only do
       {:error,
-       "Connection '#{conn_name}' is read-only; only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed"}
+       Failure.new(
+         :refused,
+         "Connection '#{conn_name}' is read-only; only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed",
+         {:read_only_connection, conn_name}
+       )}
     else
       :ok
     end
@@ -168,8 +178,14 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
           rows = extract_row_count(output)
           {"success", rows, nil}
 
-        {:error, msg} ->
+        {:error, %Failure{outcome: :unknown, message: msg}} ->
+          {"unknown", nil, msg}
+
+        {:error, %Failure{message: msg}} ->
           {"failure", nil, msg}
+
+        {:error, msg} ->
+          {"failure", nil, Errors.message(msg)}
       end
 
     AuditLogger.log_query(%{
@@ -222,14 +238,33 @@ defmodule Viber.Tools.Builtins.MysqlQuery do
           output = format_result(result, format, elapsed)
           {:ok, truncate_output(output)}
 
+        {:error, %DBConnection.ConnectionError{reason: :queue_timeout} = e} ->
+          {:error, "Query failed: #{Exception.message(e)}"}
+
+        {:error, %DBConnection.ConnectionError{} = e} ->
+          {:error, connection_lost_failure(query, e)}
+
         {:error, %{message: message}} ->
           {:error, "SQL error: #{message}"}
 
         {:error, reason} ->
-          {:error, "Query failed: #{inspect(reason)}"}
+          {:error, "Query failed: #{Errors.message(reason)}"}
       end
     rescue
       e -> {:error, "Query error: #{Exception.message(e)}"}
+    end
+  end
+
+  defp connection_lost_failure(query, e) do
+    if classify_query(query) == :read_only do
+      Failure.new(:error, "Query failed: #{Exception.message(e)}", {:connection_lost, e})
+    else
+      Failure.new(
+        :unknown,
+        "Connection lost while running a write (#{Exception.message(e)}); " <>
+          "the statement may have committed — check state before retrying",
+        {:connection_lost, e}
+      )
     end
   end
 
